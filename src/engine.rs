@@ -51,6 +51,18 @@ pub struct Engine<S: Spider> {
     state: Arc<EngineState<S>>,
 }
 
+pub struct EngineConfig<S: Spider> {
+    pub concurrency: usize,
+    pub request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
+    pub response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
+    pub item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
+    pub request_timeout: Option<Duration>,
+    pub log_stats_interval: Option<Duration>,
+    pub max_pending_requests: Option<usize>,
+    pub html_max_size_bytes: usize,
+    pub keep_alive: bool,
+}
+
 struct EngineState<S: Spider> {
     spider: Arc<S>,
     http: HttpClient,
@@ -72,18 +84,18 @@ struct EngineState<S: Spider> {
 }
 
 impl<S: Spider> Engine<S> {
-    pub fn new(
-        spider: S,
-        concurrency: usize,
-        request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
-        response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
-        item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
-        request_timeout: Option<Duration>,
-        log_stats_interval: Option<Duration>,
-        max_pending_requests: Option<usize>,
-        html_max_size_bytes: usize,
-        keep_alive: bool,
-    ) -> SilkwormResult<Self> {
+    pub fn new(spider: S, config: EngineConfig<S>) -> SilkwormResult<Self> {
+        let EngineConfig {
+            concurrency,
+            request_middlewares,
+            response_middlewares,
+            item_pipelines,
+            request_timeout,
+            log_stats_interval,
+            max_pending_requests,
+            html_max_size_bytes,
+            keep_alive,
+        } = config;
         let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
         let (queue_tx, queue_rx) = mpsc::channel(queue_size);
         let http = HttpClient::new(
@@ -315,7 +327,7 @@ impl<S: Spider> Engine<S> {
         for output in outputs {
             match output {
                 SpiderOutput::Request(req) => {
-                    self.enqueue(req).await?;
+                    self.enqueue(*req).await?;
                 }
                 SpiderOutput::Item(item) => {
                     self.process_item(item).await?;

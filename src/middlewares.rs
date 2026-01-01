@@ -199,10 +199,12 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
     }
 }
 
+type DelayStrategyFn<S> = Arc<dyn Fn(&Request<S>, &S) -> f64 + Send + Sync>;
+
 enum DelayStrategy<S: Spider> {
     Fixed(f64),
     Random(f64, f64),
-    Custom(Arc<dyn Fn(&Request<S>, &S) -> f64 + Send + Sync>),
+    Custom(DelayStrategyFn<S>),
 }
 
 pub struct DelayMiddleware<S: Spider> {

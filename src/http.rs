@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use wreq::redirect::Policy;
 use tokio::sync::Semaphore;
 use url::Url;
+use wreq::redirect::Policy;
 
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::logging::get_logger;
@@ -40,9 +40,7 @@ impl HttpClient {
                 "concurrency must be greater than zero".to_string(),
             ));
         }
-        let client = wreq::Client::builder()
-            .redirect(Policy::none())
-            .build()?;
+        let client = wreq::Client::builder().redirect(Policy::none()).build()?;
 
         Ok(HttpClient {
             client,
@@ -247,7 +245,7 @@ fn resolve_redirect_url(current_url: &str, location: &str) -> String {
 
 fn redirect_request<S>(mut req: Request<S>, redirect_url: &str, status: u16) -> Request<S> {
     let method_name = req.method.to_uppercase();
-    if matches!(status, 301 | 302 | 303) && !matches!(method_name.as_str(), "GET" | "HEAD") {
+    if matches!(status, 301..=303) && !matches!(method_name.as_str(), "GET" | "HEAD") {
         req.method = "GET".to_string();
         req.data = None;
         req.json = None;

@@ -1,9 +1,9 @@
+use fasttime::DateTime;
 use std::env;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use fasttime::DateTime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {

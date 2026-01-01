@@ -67,7 +67,7 @@ impl<S> Response<S> {
     {
         hrefs
             .into_iter()
-            .filter_map(|href| href)
+            .flatten()
             .map(|href| self.follow(href.as_ref(), callback.clone()))
             .collect()
     }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::engine::Engine;
+use crate::engine::{Engine, EngineConfig};
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::middlewares::{RequestMiddleware, ResponseMiddleware};
 use crate::pipelines::ItemPipeline;
@@ -35,23 +35,28 @@ impl<S: Spider> Default for RunConfig<S> {
     }
 }
 
+impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
+    fn from(config: RunConfig<S>) -> Self {
+        EngineConfig {
+            concurrency: config.concurrency,
+            request_middlewares: config.request_middlewares,
+            response_middlewares: config.response_middlewares,
+            item_pipelines: config.item_pipelines,
+            request_timeout: config.request_timeout,
+            log_stats_interval: config.log_stats_interval,
+            max_pending_requests: config.max_pending_requests,
+            html_max_size_bytes: config.html_max_size_bytes,
+            keep_alive: config.keep_alive,
+        }
+    }
+}
+
 pub async fn crawl<S: Spider>(spider: S) -> SilkwormResult<()> {
     crawl_with(spider, RunConfig::default()).await
 }
 
 pub async fn crawl_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormResult<()> {
-    let engine = Engine::new(
-        spider,
-        config.concurrency,
-        config.request_middlewares,
-        config.response_middlewares,
-        config.item_pipelines,
-        config.request_timeout,
-        config.log_stats_interval,
-        config.max_pending_requests,
-        config.html_max_size_bytes,
-        config.keep_alive,
-    )?;
+    let engine = Engine::new(spider, config.into())?;
     engine.run().await
 }
 

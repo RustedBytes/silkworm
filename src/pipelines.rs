@@ -327,7 +327,7 @@ fn flatten_value(prefix: &str, value: &Item, out: &mut BTreeMap<String, String>)
         Item::Array(items) => {
             let joined = items
                 .iter()
-                .map(|value| scalar_to_string(value))
+                .map(scalar_to_string)
                 .collect::<Vec<_>>()
                 .join(",");
             out.insert(prefix.to_string(), joined);
@@ -386,7 +386,7 @@ fn build_xml(tag: &str, value: &Item, depth: usize) -> String {
 }
 
 fn sanitize_tag(tag: &str) -> String {
-    let mut cleaned = tag.replace(' ', "_").replace('-', "_");
+    let mut cleaned = tag.replace([' ', '-'], "_");
     if cleaned.is_empty() {
         cleaned = "item".to_string();
     }

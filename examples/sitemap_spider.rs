@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use silkworm::{
     callback_from_fn, run_spider_with, CallbackFuture, DelayMiddleware, HtmlResponse,
-    JsonLinesPipeline, Request, Response, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, Spider,
-    SpiderResult, UserAgentMiddleware,
+    JsonLinesPipeline, Request, Response, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
+    Spider, SpiderResult, UserAgentMiddleware,
 };
 
 struct SitemapSpider {

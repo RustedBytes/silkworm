@@ -141,7 +141,7 @@ impl<S> Request<S> {
 
 #[derive(Clone)]
 pub enum SpiderOutput<S> {
-    Request(Request<S>),
+    Request(Box<Request<S>>),
     Item(Item),
 }
 
@@ -149,7 +149,7 @@ pub type SpiderResult<S> = Vec<SpiderOutput<S>>;
 
 impl<S> From<Request<S>> for SpiderOutput<S> {
     fn from(value: Request<S>) -> Self {
-        SpiderOutput::Request(value)
+        SpiderOutput::Request(Box::new(value))
     }
 }
 
