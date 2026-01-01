@@ -74,6 +74,21 @@ impl<S> Response<S> {
             .collect()
     }
 
+    /// Follow multiple URLs, filtering out empty strings.
+    /// This is a convenience method for cases where you have an iterator of strings
+    /// rather than Option<String>.
+    pub fn follow_many<I, H>(&self, hrefs: I, callback: Option<Callback<S>>) -> Vec<Request<S>>
+    where
+        I: IntoIterator<Item = H>,
+        H: AsRef<str>,
+    {
+        hrefs
+            .into_iter()
+            .filter(|href| !href.as_ref().is_empty())
+            .map(|href| self.follow(href.as_ref(), callback.clone()))
+            .collect()
+    }
+
     pub fn looks_like_html(&self) -> bool {
         let content_type = self
             .headers
@@ -239,6 +254,57 @@ impl<S> HtmlResponse<S> {
             .next())
     }
 
+    /// Select elements matching a CSS selector, returning an empty vector on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn select_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
+        self.select(selector).unwrap_or_default()
+    }
+
+    /// Select the first element matching a CSS selector, returning None on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn select_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
+        self.select_first(selector).ok().flatten()
+    }
+
+    /// Select elements matching a CSS selector, returning an empty vector on error.
+    /// Alias for `select_or_empty`.
+    pub fn css_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
+        self.select_or_empty(selector)
+    }
+
+    /// Select the first element matching a CSS selector, returning None on error.
+    /// Alias for `select_first_or_none`.
+    pub fn css_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
+        self.select_first_or_none(selector)
+    }
+
+    /// Select elements matching an XPath selector, returning an empty vector on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn xpath_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
+        self.xpath(selector).unwrap_or_default()
+    }
+
+    /// Select the first element matching an XPath selector, returning None on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn xpath_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
+        self.xpath_first(selector).ok().flatten()
+    }
+
+    /// Select the first element matching a CSS selector and return its text.
+    /// Returns an empty string if the selector doesn't match or fails to parse.
+    pub fn text_from(&self, selector: &str) -> String {
+        self.select_first_or_none(selector)
+            .map(|el| el.text())
+            .unwrap_or_default()
+    }
+
+    /// Select the first element matching a CSS selector and return an attribute value.
+    /// Returns None if the selector doesn't match, fails to parse, or the attribute doesn't exist.
+    pub fn attr_from(&self, selector: &str, attr_name: &str) -> Option<String> {
+        self.select_first_or_none(selector)
+            .and_then(|el| el.attr(attr_name))
+    }
+
     fn html_source(&self) -> &str {
         self.cached_source
             .get_or_init(|| {
@@ -341,6 +407,33 @@ impl HtmlElement {
 
     pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
         Self::select_first_with_from_source(&self.html, selector)
+    }
+
+    /// Select elements matching a CSS selector, returning an empty vector on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn select_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
+        self.select(selector).unwrap_or_default()
+    }
+
+    /// Select the first element matching a CSS selector, returning None on error.
+    /// This is a convenience method that ignores selector parsing errors.
+    pub fn select_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
+        self.select_first(selector).ok().flatten()
+    }
+
+    /// Select the first element matching a CSS selector and return its text.
+    /// Returns an empty string if the selector doesn't match or fails to parse.
+    pub fn text_from(&self, selector: &str) -> String {
+        self.select_first_or_none(selector)
+            .map(|el| el.text())
+            .unwrap_or_default()
+    }
+
+    /// Select the first element matching a CSS selector and return an attribute value.
+    /// Returns None if the selector doesn't match, fails to parse, or the attribute doesn't exist.
+    pub fn attr_from(&self, selector: &str, attr_name: &str) -> Option<String> {
+        self.select_first_or_none(selector)
+            .and_then(|el| el.attr(attr_name))
     }
 
     fn select_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
@@ -723,5 +816,122 @@ mod tests {
         response.close();
         assert!(response.body.is_empty());
         assert!(response.headers.is_empty());
+    }
+
+    #[test]
+    fn select_or_empty_returns_empty_on_invalid_selector() {
+        let body = b"<html><body><div class=\"test\">Content</div></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        
+        // Invalid selector returns empty
+        let results = html.select_or_empty("div[invalid");
+        assert_eq!(results.len(), 0);
+        
+        // Valid selector works
+        let results = html.select_or_empty(".test");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text(), "Content");
+    }
+
+    #[test]
+    fn select_first_or_none_returns_none_on_invalid_selector() {
+        let body = b"<html><body><div class=\"test\">Content</div></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        
+        // Invalid selector returns None
+        assert!(html.select_first_or_none("div[invalid").is_none());
+        
+        // Valid selector works
+        let element = html.select_first_or_none(".test");
+        assert!(element.is_some());
+        assert_eq!(element.unwrap().text(), "Content");
+    }
+
+    #[test]
+    fn text_from_extracts_text_from_selector() {
+        let body = b"<html><body><h1>Title</h1><p class=\"content\">Text</p></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        
+        assert_eq!(html.text_from("h1"), "Title");
+        assert_eq!(html.text_from(".content"), "Text");
+        assert_eq!(html.text_from(".missing"), "");
+    }
+
+    #[test]
+    fn attr_from_extracts_attribute() {
+        let body = b"<html><body><a href=\"/link\" class=\"test\">Link</a></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        
+        assert_eq!(html.attr_from("a", "href"), Some("/link".to_string()));
+        assert_eq!(html.attr_from("a", "class"), Some("test".to_string()));
+        assert_eq!(html.attr_from("a", "missing"), None);
+        assert_eq!(html.attr_from(".missing", "href"), None);
+    }
+
+    #[test]
+    fn follow_many_filters_empty_strings() {
+        let request = Request::<()>::new("https://example.com/base/");
+        let response = Response {
+            url: "https://example.com/base/".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+        let hrefs = vec!["/one", "", "two", ""];
+        let requests = response.follow_many(hrefs, None);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, "https://example.com/one");
+        assert_eq!(requests[1].url, "https://example.com/base/two");
+    }
+
+    #[test]
+    fn html_element_select_or_empty_returns_empty_on_invalid() {
+        let body = b"<div class=\"parent\"><span class=\"child\">Text</span></div>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        let parent = html.select_first_or_none(".parent").unwrap();
+        
+        // Invalid selector returns empty
+        assert_eq!(parent.select_or_empty("span[invalid").len(), 0);
+        
+        // Valid selector works
+        let children = parent.select_or_empty(".child");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].text(), "Text");
     }
 }

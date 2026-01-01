@@ -52,24 +52,18 @@ impl Spider for QuotesSpider {
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
         let mut out = Vec::new();
-        let quotes = match response.select(".quote") {
-            Ok(nodes) => nodes,
-            Err(_) => return out,
-        };
-
-        for quote in quotes {
-            let text_el = match quote.select_first(".text") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-            let author_el = match quote.select_first(".author") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-            out.push(json!({
-                "text": text_el.text(),
-                "author": author_el.text(),
-            }).into());
+        
+        // Using ergonomic selectors - no match statements needed!
+        for quote in response.select_or_empty(".quote") {
+            let text = quote.text_from(".text");
+            let author = quote.text_from(".author");
+            
+            if !text.is_empty() && !author.is_empty() {
+                out.push(json!({
+                    "text": text,
+                    "author": author,
+                }).into());
+            }
         }
 
         out
@@ -156,6 +150,32 @@ let request = Request::new("https://example.com/search")
     .with_param("q", "rust")
     .with_header("Accept", "text/html");
 ```
+
+## Ergonomic Selectors
+
+Silkworm provides both error-returning and convenience selector methods for maximum flexibility:
+
+```rust
+// Error-returning methods (when you need precise error handling)
+let elements = response.select(".item")?;
+let element = response.select_first(".item")?;
+
+// Ergonomic methods (for cleaner code when errors can be ignored)
+let elements = response.select_or_empty(".item");  // Returns Vec, never errors
+let element = response.select_first_or_none(".item");  // Returns Option
+
+// Direct text/attribute extraction
+let title = response.text_from("h1");  // Empty string if not found
+let href = response.attr_from("a", "href");  // None if not found
+
+// Also works on HtmlElement for nested selections
+for item in response.select_or_empty(".item") {
+    let name = item.text_from(".name");
+    let price = item.text_from(".price");
+}
+```
+
+All these methods work with CSS selectors and XPath (use `xpath_or_empty()`, `xpath_first_or_none()`, etc.).
 
 ## Configuration
 
