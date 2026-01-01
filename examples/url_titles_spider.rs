@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use serde_json::{Map, Number, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -7,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use silkworm::{
-    run_spider_with, HtmlResponse, JsonLinesPipeline, Request, RetryMiddleware, RunConfig,
-    SkipNonHtmlMiddleware, Spider, SpiderResult, UserAgentMiddleware,
+    HtmlResponse, JsonLinesPipeline, Request, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
+    Spider, SpiderResult, UserAgentMiddleware, run_spider_with,
 };
 
 struct UrlTitlesSpider {
@@ -110,7 +109,6 @@ impl UrlTitlesSpider {
     }
 }
 
-#[async_trait]
 impl Spider for UrlTitlesSpider {
     fn name(&self) -> &str {
         "url_titles_from_file"
@@ -195,7 +193,9 @@ fn main() -> silkworm::SilkwormResult<()> {
         Ok(values) => values,
         Err(err) => {
             eprintln!("{err}");
-            eprintln!("Usage: cargo run --example url_titles_spider -- --urls-file <path> [--output <path>]");
+            eprintln!(
+                "Usage: cargo run --example url_titles_spider -- --urls-file <path> [--output <path>]"
+            );
             std::process::exit(1);
         }
     };

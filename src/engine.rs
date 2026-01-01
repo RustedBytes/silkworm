@@ -3,12 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 use tokio::task::JoinSet;
 
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::http::HttpClient;
-use crate::logging::{complete_logs, get_logger, Logger};
+use crate::logging::{Logger, complete_logs, get_logger};
 use crate::middlewares::{RequestMiddleware, ResponseAction, ResponseMiddleware};
 use crate::pipelines::ItemPipeline;
 use crate::request::{Request, SpiderOutput, SpiderResult};
@@ -151,7 +151,7 @@ impl<S: Spider> Engine<S> {
         }
 
         if let Some(interval) = self.state.log_stats_interval {
-            if interval > Duration::from_secs(0) {
+            if interval > Duration::ZERO {
                 let engine = Self {
                     state: self.state.clone(),
                 };

@@ -1,12 +1,11 @@
-use async_trait::async_trait;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use silkworm::{
-    run_spider_with, CsvPipeline, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig,
-    Spider, SpiderResult, UserAgentMiddleware, XmlPipeline,
+    CsvPipeline, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider, SpiderResult,
+    UserAgentMiddleware, XmlPipeline, run_spider_with,
 };
 
 struct ExportFormatsSpider {
@@ -23,7 +22,6 @@ impl ExportFormatsSpider {
     }
 }
 
-#[async_trait]
 impl Spider for ExportFormatsSpider {
     fn name(&self) -> &str {
         "export_formats"

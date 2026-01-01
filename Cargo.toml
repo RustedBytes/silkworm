@@ -1,7 +1,7 @@
 [package]
 name = "silkworm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 description = "Async-first web scraping framework (Rust port)"
 
@@ -28,3 +28,10 @@ fasttime = "0.2"
 
 [dev-dependencies]
 # Add test dependencies here if needed
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

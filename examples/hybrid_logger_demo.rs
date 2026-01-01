@@ -1,8 +1,7 @@
-use async_trait::async_trait;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use silkworm::{get_logger, run_spider, HtmlResponse, Logger, Spider, SpiderResult};
+use silkworm::{HtmlResponse, Logger, Spider, SpiderResult, get_logger, run_spider};
 
 struct HybridLoggerSpider {
     logger: Logger,
@@ -21,7 +20,6 @@ impl HybridLoggerSpider {
     }
 }
 
-#[async_trait]
 impl Spider for HybridLoggerSpider {
     fn name(&self) -> &str {
         "hybrid_logger_demo"

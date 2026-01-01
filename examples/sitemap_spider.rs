@@ -1,15 +1,14 @@
-use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{Number, Value};
 use std::future;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use silkworm::{
-    callback_from_fn, run_spider_with, CallbackFuture, DelayMiddleware, HtmlResponse,
-    JsonLinesPipeline, Request, Response, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
-    Spider, SpiderResult, UserAgentMiddleware,
+    CallbackFuture, DelayMiddleware, HtmlResponse, JsonLinesPipeline, Request, Response,
+    RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, Spider, SpiderResult, UserAgentMiddleware,
+    callback_from_fn, run_spider_with,
 };
 
 struct SitemapSpider {
@@ -82,17 +81,18 @@ impl SitemapSpider {
     }
 }
 
-#[async_trait]
 impl Spider for SitemapSpider {
     fn name(&self) -> &str {
         "sitemap_metadata"
     }
 
     async fn start_requests(&self) -> Vec<Request<Self>> {
-        vec![Request::new(self.sitemap_url.clone())
-            .with_callback(callback_from_fn(parse_sitemap))
-            .with_meta("allow_non_html", Value::Bool(true))
-            .with_dont_filter(true)]
+        vec![
+            Request::new(self.sitemap_url.clone())
+                .with_callback(callback_from_fn(parse_sitemap))
+                .with_meta("allow_non_html", Value::Bool(true))
+                .with_dont_filter(true),
+        ]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {

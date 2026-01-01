@@ -1,7 +1,6 @@
-use async_trait::async_trait;
 use serde_json::json;
 
-use silkworm::{get_logger, run_spider, HtmlResponse, Logger, Spider, SpiderResult};
+use silkworm::{HtmlResponse, Logger, Spider, SpiderResult, get_logger, run_spider};
 
 struct LoggingSpider {
     logger: Logger,
@@ -16,7 +15,6 @@ impl LoggingSpider {
     }
 }
 
-#[async_trait]
 impl Spider for LoggingSpider {
     fn name(&self) -> &str {
         "logging_demo"

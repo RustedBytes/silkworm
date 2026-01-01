@@ -1,13 +1,12 @@
-use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{Number, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use silkworm::{
-    run_spider_with, DelayMiddleware, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig,
-    Spider, SpiderResult, UserAgentMiddleware,
+    DelayMiddleware, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider,
+    SpiderResult, UserAgentMiddleware, run_spider_with,
 };
 
 struct LobstersSpider {
@@ -24,7 +23,6 @@ impl LobstersSpider {
     }
 }
 
-#[async_trait]
 impl Spider for LobstersSpider {
     fn name(&self) -> &str {
         "lobsters_front_page"

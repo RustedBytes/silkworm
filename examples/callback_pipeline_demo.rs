@@ -1,16 +1,14 @@
-use async_trait::async_trait;
 use serde_json::{Number, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
 use silkworm::{
-    run_spider_with, CallbackPipeline, HtmlResponse, Item, RunConfig, SilkwormResult, Spider,
-    SpiderResult, UserAgentMiddleware,
+    CallbackPipeline, HtmlResponse, Item, RunConfig, SilkwormResult, Spider, SpiderResult,
+    UserAgentMiddleware, run_spider_with,
 };
 
 struct QuotesSpider;
 
-#[async_trait]
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
         "quotes_callback"

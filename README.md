@@ -28,13 +28,11 @@ cargo add tokio --features rt-multi-thread,macros
 ## Quick Start
 
 ```rust
-use async_trait::async_trait;
 use serde_json::json;
 use silkworm::{run_spider, HtmlResponse, Spider, SpiderResult};
 
 struct QuotesSpider;
 
-#[async_trait]
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
         "quotes"

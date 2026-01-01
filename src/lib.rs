@@ -17,16 +17,16 @@ pub use api::fetch_html;
 pub use engine::Engine;
 pub use errors::{SilkwormError, SilkwormResult};
 pub use http::HttpClient;
-pub use logging::{complete_logs, get_logger, Logger};
+pub use logging::{Logger, complete_logs, get_logger};
 pub use middlewares::{
     DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
     RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
 };
 pub use pipelines::{CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, XmlPipeline};
 pub use request::{
-    callback_from_fn, Callback, CallbackFuture, Request, SpiderOutput, SpiderResult,
+    Callback, CallbackFuture, Request, SpiderOutput, SpiderResult, callback_from_fn,
 };
 pub use response::{HtmlElement, HtmlResponse, Response};
-pub use runner::{crawl, crawl_with, run_spider, run_spider_with, RunConfig};
+pub use runner::{RunConfig, crawl, crawl_with, run_spider, run_spider_with};
 pub use spider::Spider;
 pub use types::{Headers, Item, Meta, Params};

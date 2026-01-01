@@ -1,11 +1,9 @@
-use async_trait::async_trait;
 use serde_json::json;
 
-use silkworm::{run_spider, HtmlResponse, Spider, SpiderResult};
+use silkworm::{HtmlResponse, Spider, SpiderResult, run_spider};
 
 struct QuotesSpider;
 
-#[async_trait]
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
         "quotes_xpath"

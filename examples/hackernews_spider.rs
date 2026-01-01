@@ -1,12 +1,11 @@
-use async_trait::async_trait;
 use serde_json::{Number, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use silkworm::{
-    run_spider_with, DelayMiddleware, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig,
-    Spider, SpiderResult, UserAgentMiddleware,
+    DelayMiddleware, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider,
+    SpiderResult, UserAgentMiddleware, run_spider_with,
 };
 
 struct HackerNewsSpider {
@@ -23,7 +22,6 @@ impl HackerNewsSpider {
     }
 }
 
-#[async_trait]
 impl Spider for HackerNewsSpider {
     fn name(&self) -> &str {
         "hacker_news_latest"
