@@ -236,9 +236,10 @@ impl HttpClient {
 
 fn resolve_redirect_url(current_url: &str, location: &str) -> String {
     if let Ok(base) = Url::parse(current_url)
-        && let Ok(joined) = base.join(location) {
-            return joined.to_string();
-        }
+        && let Ok(joined) = base.join(location)
+    {
+        return joined.to_string();
+    }
     location.to_string()
 }
 

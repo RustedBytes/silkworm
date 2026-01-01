@@ -151,14 +151,15 @@ impl<S: Spider> Engine<S> {
         }
 
         if let Some(interval) = self.state.log_stats_interval
-            && interval > Duration::ZERO {
-                let engine = Self {
-                    state: self.state.clone(),
-                };
-                join_set.spawn(async move {
-                    engine.log_statistics(interval).await;
-                });
-            }
+            && interval > Duration::ZERO
+        {
+            let engine = Self {
+                state: self.state.clone(),
+            };
+            join_set.spawn(async move {
+                engine.log_statistics(interval).await;
+            });
+        }
 
         if let Err(err) = self.open_spider().await {
             self.state

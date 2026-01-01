@@ -2,6 +2,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::sync::OnceLock;
 
 use encoding_rs::Encoding;
 use regex::Regex;
@@ -99,49 +100,112 @@ impl<S> Response<S> {
         self.headers.clear();
     }
 
+    #[cfg(feature = "scraper-atomic")]
     pub fn into_html(self, doc_max_size_bytes: usize) -> HtmlResponse<S> {
         HtmlResponse {
             inner: self,
             doc_max_size_bytes,
+            cached_source: OnceLock::new(),
+            cached_document: OnceLock::new(),
+        }
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    pub fn into_html(self, doc_max_size_bytes: usize) -> HtmlResponse<S> {
+        HtmlResponse {
+            inner: self,
+            doc_max_size_bytes,
+            cached_source: OnceLock::new(),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct HtmlResponse<S> {
     inner: Response<S>,
     pub doc_max_size_bytes: usize,
+    cached_source: OnceLock<String>,
+    #[cfg(feature = "scraper-atomic")]
+    cached_document: OnceLock<scraper::Html>,
+}
+
+#[cfg(feature = "scraper-atomic")]
+impl<S: Clone> Clone for HtmlResponse<S> {
+    fn clone(&self) -> Self {
+        HtmlResponse {
+            inner: self.inner.clone(),
+            doc_max_size_bytes: self.doc_max_size_bytes,
+            cached_source: OnceLock::new(),
+            cached_document: OnceLock::new(),
+        }
+    }
+}
+
+#[cfg(not(feature = "scraper-atomic"))]
+impl<S: Clone> Clone for HtmlResponse<S> {
+    fn clone(&self) -> Self {
+        HtmlResponse {
+            inner: self.inner.clone(),
+            doc_max_size_bytes: self.doc_max_size_bytes,
+            cached_source: OnceLock::new(),
+        }
+    }
 }
 
 impl<S> HtmlResponse<S> {
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
-        let source = self.html_source();
-        let doc = scraper::Html::parse_document(&source);
-        let mut out = Vec::new();
-        for element in doc.select(&selector) {
-            out.push(HtmlElement {
-                html: element.html(),
-                attrs: element_attrs(&element),
-            });
-        }
-        Ok(out)
+        Ok(self.select_with(&selector))
     }
 
     pub fn select_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
-        let source = self.html_source();
-        let doc = scraper::Html::parse_document(&source);
-        if let Some(element) = doc.select(&selector).next() {
-            Ok(Some(HtmlElement {
+        Ok(self.select_first_with(&selector))
+    }
+
+    #[cfg(feature = "scraper-atomic")]
+    pub fn select_with(&self, selector: &scraper::Selector) -> Vec<HtmlElement> {
+        let doc = self.document();
+        let mut out = Vec::new();
+        for element in doc.select(selector) {
+            out.push(HtmlElement {
                 html: element.html(),
                 attrs: element_attrs(&element),
-            }))
-        } else {
-            Ok(None)
+            });
         }
+        out
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    pub fn select_with(&self, selector: &scraper::Selector) -> Vec<HtmlElement> {
+        let doc = scraper::Html::parse_document(self.html_source());
+        let mut out = Vec::new();
+        for element in doc.select(selector) {
+            out.push(HtmlElement {
+                html: element.html(),
+                attrs: element_attrs(&element),
+            });
+        }
+        out
+    }
+
+    #[cfg(feature = "scraper-atomic")]
+    pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
+        let doc = self.document();
+        doc.select(selector).next().map(|element| HtmlElement {
+            html: element.html(),
+            attrs: element_attrs(&element),
+        })
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
+        let doc = scraper::Html::parse_document(self.html_source());
+        doc.select(selector).next().map(|element| HtmlElement {
+            html: element.html(),
+            attrs: element_attrs(&element),
+        })
     }
 
     pub fn css(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
@@ -153,27 +217,61 @@ impl<S> HtmlResponse<S> {
     }
 
     pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        xpath_from_source(&self.html_source(), selector)
+        xpath_from_source(self.html_source(), selector)
     }
 
     pub fn xpath_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        Ok(xpath_from_source(&self.html_source(), selector)?
+        Ok(xpath_from_source(self.html_source(), selector)?
             .into_iter()
             .next())
     }
 
-    fn html_source(&self) -> String {
-        let limit = self.doc_max_size_bytes;
-        if limit == 0 {
-            return String::new();
-        }
-        let len = self.inner.body.len();
-        let slice = if len > limit {
-            &self.inner.body[..limit]
-        } else {
-            &self.inner.body
-        };
-        decode_body(slice, &self.inner.headers).0
+    pub fn xpath_with(&self, xpath: &sxd_xpath::XPath) -> SilkwormResult<Vec<HtmlElement>> {
+        xpath_from_source_with(self.html_source(), xpath)
+    }
+
+    pub fn xpath_first_with(
+        &self,
+        xpath: &sxd_xpath::XPath,
+    ) -> SilkwormResult<Option<HtmlElement>> {
+        Ok(xpath_from_source_with(self.html_source(), xpath)?
+            .into_iter()
+            .next())
+    }
+
+    fn html_source(&self) -> &str {
+        self.cached_source
+            .get_or_init(|| {
+                let limit = self.doc_max_size_bytes;
+                if limit == 0 {
+                    return String::new();
+                }
+                let len = self.inner.body.len();
+                let slice = if len > limit {
+                    &self.inner.body[..limit]
+                } else {
+                    &self.inner.body
+                };
+                decode_body(slice, &self.inner.headers).0
+            })
+            .as_str()
+    }
+
+    #[cfg(feature = "scraper-atomic")]
+    fn document(&self) -> &scraper::Html {
+        self.cached_document
+            .get_or_init(|| scraper::Html::parse_document(self.html_source()))
+    }
+
+    #[cfg(feature = "scraper-atomic")]
+    fn clear_cache(&mut self) {
+        self.cached_source = OnceLock::new();
+        self.cached_document = OnceLock::new();
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    fn clear_cache(&mut self) {
+        self.cached_source = OnceLock::new();
     }
 }
 
@@ -187,6 +285,7 @@ impl<S> Deref for HtmlResponse<S> {
 
 impl<S> DerefMut for HtmlResponse<S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.clear_cache();
         &mut self.inner
     }
 }
@@ -204,11 +303,11 @@ impl HtmlElement {
 
     pub fn text(&self) -> String {
         let doc = scraper::Html::parse_fragment(&self.html);
-        let selector = scraper::Selector::parse("*").ok();
-        if let Some(selector) = selector
-            && let Some(element) = doc.select(&selector).next() {
-                return element.text().collect::<Vec<_>>().join("");
+        if let Some(selector) = select_all_selector() {
+            if let Some(element) = doc.select(selector).next() {
+                return element.text().collect::<String>();
             }
+        }
         self.html.clone()
     }
 
@@ -218,10 +317,11 @@ impl HtmlElement {
         }
 
         let doc = scraper::Html::parse_fragment(&self.html);
-        let selector = scraper::Selector::parse("*").ok()?;
-        for element in doc.select(&selector) {
-            if let Some(value) = element.value().attr(name) {
-                return Some(value.to_string());
+        if let Some(selector) = select_all_selector() {
+            for element in doc.select(selector) {
+                if let Some(value) = element.value().attr(name) {
+                    return Some(value.to_string());
+                }
             }
         }
         None
@@ -235,18 +335,18 @@ impl HtmlElement {
         Self::select_first_from_source(&self.html, selector)
     }
 
+    pub fn select_with(&self, selector: &scraper::Selector) -> Vec<HtmlElement> {
+        Self::select_with_from_source(&self.html, selector)
+    }
+
+    pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
+        Self::select_first_with_from_source(&self.html, selector)
+    }
+
     fn select_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
-        let doc = scraper::Html::parse_fragment(source);
-        let mut out = Vec::new();
-        for element in doc.select(&selector) {
-            out.push(HtmlElement {
-                html: element.html(),
-                attrs: element_attrs(&element),
-            });
-        }
-        Ok(out)
+        Ok(Self::select_with_from_source(source, &selector))
     }
 
     fn select_first_from_source(
@@ -255,15 +355,30 @@ impl HtmlElement {
     ) -> SilkwormResult<Option<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
+        Ok(Self::select_first_with_from_source(source, &selector))
+    }
+
+    fn select_with_from_source(source: &str, selector: &scraper::Selector) -> Vec<HtmlElement> {
         let doc = scraper::Html::parse_fragment(source);
-        if let Some(element) = doc.select(&selector).next() {
-            Ok(Some(HtmlElement {
+        let mut out = Vec::new();
+        for element in doc.select(selector) {
+            out.push(HtmlElement {
                 html: element.html(),
                 attrs: element_attrs(&element),
-            }))
-        } else {
-            Ok(None)
+            });
         }
+        out
+    }
+
+    fn select_first_with_from_source(
+        source: &str,
+        selector: &scraper::Selector,
+    ) -> Option<HtmlElement> {
+        let doc = scraper::Html::parse_fragment(source);
+        doc.select(selector).next().map(|element| HtmlElement {
+            html: element.html(),
+            attrs: element_attrs(&element),
+        })
     }
 }
 
@@ -279,11 +394,26 @@ fn xpath_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlEle
         SilkwormError::Selector("Invalid XPath selector: empty expression".to_string())
     })?;
 
+    xpath_from_source_with_document(document, &xpath)
+}
+
+fn xpath_from_source_with(
+    source: &str,
+    xpath: &sxd_xpath::XPath,
+) -> SilkwormResult<Vec<HtmlElement>> {
+    let package = sxd_html::parse_html(source);
+    let document = package.as_document();
+    xpath_from_source_with_document(document, xpath)
+}
+
+fn xpath_from_source_with_document(
+    document: sxd_document::dom::Document<'_>,
+    xpath: &sxd_xpath::XPath,
+) -> SilkwormResult<Vec<HtmlElement>> {
     let context = Context::new();
     let value = xpath
         .evaluate(&context, document.root())
         .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
-
     Ok(xpath_value_to_elements(value))
 }
 
@@ -348,6 +478,13 @@ fn element_attrs(element: &scraper::ElementRef<'_>) -> HashMap<String, String> {
         attrs.insert(name.local.to_string(), value.to_string());
     }
     attrs
+}
+
+fn select_all_selector() -> Option<&'static scraper::Selector> {
+    static SELECT_ALL: OnceLock<Option<scraper::Selector>> = OnceLock::new();
+    SELECT_ALL
+        .get_or_init(|| scraper::Selector::parse("*").ok())
+        .as_ref()
 }
 
 fn node_to_markup(node: Node<'_>) -> String {
