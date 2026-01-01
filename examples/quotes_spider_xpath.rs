@@ -1,8 +1,19 @@
-use serde_json::json;
+use serde::Serialize;
 
-use silkworm::{HtmlResponse, Spider, SpiderResult, run_spider};
+use silkworm::{prelude::*, run_spider};
 
 struct QuotesSpider;
+
+#[derive(Debug, Serialize)]
+struct QuoteOnly {
+    quote: String,
+}
+
+#[derive(Debug, Serialize)]
+struct QuoteItem {
+    text: String,
+    author: String,
+}
 
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
@@ -16,40 +27,24 @@ impl Spider for QuotesSpider {
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
         let mut out = Vec::new();
 
-        match response.xpath("//span[@class='text']") {
-            Ok(nodes) => {
-                for node in nodes {
-                    out.push(json!({"quote": node.text()}).into());
-                }
-            }
-            Err(err) => {
-                self.log()
-                    .warn("XPath not supported", &[("error", err.to_string())]);
+        for node in response.xpath_or_empty("//span[@class='text']") {
+            let quote = QuoteOnly { quote: node.text() };
+            if let Ok(item) = item_from(quote) {
+                out.push(item.into());
             }
         }
 
-        let quotes = match response.select(".quote") {
-            Ok(nodes) => nodes,
-            Err(_) => return out,
-        };
+        for quote in response.select_or_empty(".quote") {
+            let text = quote.text_from(".text");
+            let author = quote.text_from(".author");
+            if text.is_empty() || author.is_empty() {
+                continue;
+            }
 
-        for quote in quotes {
-            let text_el = match quote.select_first(".text") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-            let author_el = match quote.select_first(".author") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-
-            out.push(
-                json!({
-                    "text": text_el.text(),
-                    "author": author_el.text(),
-                })
-                .into(),
-            );
+            let quote = QuoteItem { text, author };
+            if let Ok(item) = item_from(quote) {
+                out.push(item.into());
+            }
         }
 
         out

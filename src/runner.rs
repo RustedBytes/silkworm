@@ -35,6 +35,80 @@ impl<S: Spider> Default for RunConfig<S> {
     }
 }
 
+impl<S: Spider> RunConfig<S> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
+
+    pub fn with_request_middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: RequestMiddleware<S> + 'static,
+    {
+        self.request_middlewares.push(Arc::new(middleware));
+        self
+    }
+
+    pub fn with_response_middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: ResponseMiddleware<S> + 'static,
+    {
+        self.response_middlewares.push(Arc::new(middleware));
+        self
+    }
+
+    pub fn with_item_pipeline<P>(mut self, pipeline: P) -> Self
+    where
+        P: ItemPipeline<S> + 'static,
+    {
+        self.item_pipelines.push(Arc::new(pipeline));
+        self
+    }
+
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_log_stats_interval(mut self, interval: Duration) -> Self {
+        self.log_stats_interval = Some(interval);
+        self
+    }
+
+    pub fn with_max_pending_requests(mut self, max_pending_requests: usize) -> Self {
+        self.max_pending_requests = Some(max_pending_requests);
+        self
+    }
+
+    pub fn with_html_max_size_bytes(mut self, html_max_size_bytes: usize) -> Self {
+        self.html_max_size_bytes = html_max_size_bytes;
+        self
+    }
+
+    pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
+        self.keep_alive = keep_alive;
+        self
+    }
+
+    pub fn with_middlewares<Req, Resp>(
+        mut self,
+        request_middlewares: Req,
+        response_middlewares: Resp,
+    ) -> Self
+    where
+        Req: IntoIterator<Item = Arc<dyn RequestMiddleware<S>>>,
+        Resp: IntoIterator<Item = Arc<dyn ResponseMiddleware<S>>>,
+    {
+        self.request_middlewares.extend(request_middlewares);
+        self.response_middlewares.extend(response_middlewares);
+        self
+    }
+}
+
 impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
     fn from(config: RunConfig<S>) -> Self {
         EngineConfig {
@@ -76,9 +150,14 @@ pub fn run_spider_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormRe
 mod tests {
     use super::RunConfig;
     use crate::engine::EngineConfig;
+    use crate::middlewares::{
+        RequestMiddleware, ResponseMiddleware, RetryMiddleware, UserAgentMiddleware,
+    };
+    use crate::pipelines::JsonLinesPipeline;
     use crate::request::SpiderResult;
     use crate::response::HtmlResponse;
     use crate::spider::Spider;
+    use std::sync::Arc;
 
     struct TestSpider;
 
@@ -132,5 +211,55 @@ mod tests {
         assert_eq!(engine_config.max_pending_requests, Some(9));
         assert_eq!(engine_config.html_max_size_bytes, 123);
         assert_eq!(engine_config.keep_alive, true);
+    }
+
+    #[test]
+    fn run_config_builder_sets_fields() {
+        let config = RunConfig::<TestSpider>::new()
+            .with_concurrency(8)
+            .with_request_timeout(std::time::Duration::from_secs(5))
+            .with_log_stats_interval(std::time::Duration::from_secs(2))
+            .with_max_pending_requests(12)
+            .with_html_max_size_bytes(321)
+            .with_keep_alive(true);
+
+        assert_eq!(config.concurrency, 8);
+        assert_eq!(
+            config.request_timeout,
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(
+            config.log_stats_interval,
+            Some(std::time::Duration::from_secs(2))
+        );
+        assert_eq!(config.max_pending_requests, Some(12));
+        assert_eq!(config.html_max_size_bytes, 321);
+        assert_eq!(config.keep_alive, true);
+    }
+
+    #[test]
+    fn run_config_builder_adds_components() {
+        let config = RunConfig::<TestSpider>::new()
+            .with_request_middleware(UserAgentMiddleware::new(Vec::new(), None))
+            .with_response_middleware(RetryMiddleware::new(1, None, None, 0.0))
+            .with_item_pipeline(JsonLinesPipeline::new("data/test.jl"));
+
+        assert_eq!(config.request_middlewares.len(), 1);
+        assert_eq!(config.response_middlewares.len(), 1);
+        assert_eq!(config.item_pipelines.len(), 1);
+    }
+
+    #[test]
+    fn run_config_with_middlewares_appends_lists() {
+        let request_middlewares: Vec<Arc<dyn RequestMiddleware<TestSpider>>> =
+            vec![Arc::new(UserAgentMiddleware::new(Vec::new(), None))];
+        let response_middlewares: Vec<Arc<dyn ResponseMiddleware<TestSpider>>> =
+            vec![Arc::new(RetryMiddleware::new(1, None, None, 0.0))];
+
+        let config = RunConfig::<TestSpider>::new()
+            .with_middlewares(request_middlewares, response_middlewares);
+
+        assert_eq!(config.request_middlewares.len(), 1);
+        assert_eq!(config.response_middlewares.len(), 1);
     }
 }

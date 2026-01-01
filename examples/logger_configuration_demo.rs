@@ -1,9 +1,15 @@
-use serde_json::json;
+use serde::Serialize;
 
-use silkworm::{HtmlResponse, Logger, Spider, SpiderResult, get_logger, run_spider};
+use silkworm::{Logger, get_logger, prelude::*, run_spider};
 
 struct LoggingSpider {
     logger: Logger,
+}
+
+#[derive(Debug, Serialize)]
+struct PageStatus {
+    url: String,
+    status: u16,
 }
 
 impl LoggingSpider {
@@ -32,7 +38,15 @@ impl Spider for LoggingSpider {
                 ("status", response.status.to_string()),
             ],
         );
-        vec![json!({"url": response.url, "status": response.status}).into()]
+        let item = PageStatus {
+            url: response.url,
+            status: response.status,
+        };
+        if let Ok(item) = item_from(item) {
+            vec![item.into()]
+        } else {
+            Vec::new()
+        }
     }
 }
 

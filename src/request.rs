@@ -4,6 +4,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::Number;
+
 use crate::response::Response;
 use crate::types::{Headers, Item, Meta, Params};
 
@@ -79,6 +81,18 @@ impl<S> Request<S> {
         }
     }
 
+    pub fn builder(url: impl Into<String>) -> RequestBuilder<S> {
+        RequestBuilder::new(url)
+    }
+
+    pub fn get(url: impl Into<String>) -> Self {
+        Self::new(url)
+    }
+
+    pub fn post(url: impl Into<String>) -> Self {
+        Self::new(url).with_method("POST")
+    }
+
     pub fn with_method(mut self, method: impl Into<String>) -> Self {
         self.method = method.into();
         self
@@ -89,8 +103,32 @@ impl<S> Request<S> {
         self
     }
 
+    pub fn with_headers<I, K, V>(mut self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (key, value) in headers {
+            self.headers.insert(key.into(), value.into());
+        }
+        self
+    }
+
     pub fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn with_params<I, K, V>(mut self, params: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (key, value) in params {
+            self.params.insert(key.into(), value.into());
+        }
         self
     }
 
@@ -109,6 +147,37 @@ impl<S> Request<S> {
         self
     }
 
+    pub fn with_meta_str(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.meta
+            .insert(key.into(), Item::String(value.into()));
+        self
+    }
+
+    pub fn with_meta_bool(mut self, key: impl Into<String>, value: bool) -> Self {
+        self.meta.insert(key.into(), Item::Bool(value));
+        self
+    }
+
+    pub fn with_meta_number<N>(mut self, key: impl Into<String>, value: N) -> Self
+    where
+        N: Into<Number>,
+    {
+        self.meta
+            .insert(key.into(), Item::Number(value.into()));
+        self
+    }
+
+    pub fn with_meta_entries<I, K>(mut self, meta: I) -> Self
+    where
+        I: IntoIterator<Item = (K, Item)>,
+        K: Into<String>,
+    {
+        for (key, value) in meta {
+            self.meta.insert(key.into(), value);
+        }
+        self
+    }
+
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -116,6 +185,16 @@ impl<S> Request<S> {
 
     pub fn with_callback(mut self, callback: Callback<S>) -> Self {
         self.callback = Some(callback);
+        self
+    }
+
+    pub fn with_callback_fn<F, Fut>(mut self, func: F) -> Self
+    where
+        S: Send + Sync + 'static,
+        F: Fn(Arc<S>, Response<S>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = SpiderResult<S>> + Send + 'static,
+    {
+        self.callback = Some(callback_from(func));
         self
     }
 
@@ -139,6 +218,62 @@ impl<S> Request<S> {
     }
 }
 
+pub struct RequestBuilder<S> {
+    request: Request<S>,
+}
+
+impl<S> RequestBuilder<S> {
+    pub fn new(url: impl Into<String>) -> Self {
+        RequestBuilder {
+            request: Request::new(url),
+        }
+    }
+
+    pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.request.headers.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.request.params.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn json(mut self, value: impl Into<Item>) -> Self {
+        self.request.json = Some(value.into());
+        self
+    }
+
+    pub fn data(mut self, data: Vec<u8>) -> Self {
+        self.request.data = Some(data);
+        self
+    }
+
+    pub fn callback_fn<F, Fut>(mut self, func: F) -> Self
+    where
+        S: Send + Sync + 'static,
+        F: Fn(Arc<S>, Response<S>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = SpiderResult<S>> + Send + 'static,
+    {
+        self.request.callback = Some(callback_from(func));
+        self
+    }
+
+    pub fn dont_filter(mut self, dont_filter: bool) -> Self {
+        self.request.dont_filter = dont_filter;
+        self
+    }
+
+    pub fn priority(mut self, priority: i32) -> Self {
+        self.request.priority = priority;
+        self
+    }
+
+    pub fn build(self) -> Request<S> {
+        self.request
+    }
+}
+
 #[derive(Clone)]
 pub enum SpiderOutput<S> {
     Request(Box<Request<S>>),
@@ -159,9 +294,10 @@ impl<S> From<Item> for SpiderOutput<S> {
     }
 }
 
-pub fn callback_from_fn<S, Fut>(func: fn(Arc<S>, Response<S>) -> Fut) -> Callback<S>
+pub fn callback_from<S, F, Fut>(func: F) -> Callback<S>
 where
     S: Send + Sync + 'static,
+    F: Fn(Arc<S>, Response<S>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = SpiderResult<S>> + Send + 'static,
 {
     Arc::new(move |spider: Arc<S>, response: Response<S>| {
@@ -170,40 +306,22 @@ where
     })
 }
 
+pub fn callback_from_fn<S, Fut>(func: fn(Arc<S>, Response<S>) -> Fut) -> Callback<S>
+where
+    S: Send + Sync + 'static,
+    Fut: Future<Output = SpiderResult<S>> + Send + 'static,
+{
+    callback_from(func)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Request, SpiderOutput, callback_from_fn};
+    use super::{Request, SpiderOutput, callback_from, callback_from_fn};
     use crate::response::Response;
     use crate::types::{Headers, Item};
     use std::sync::Arc;
 
     struct TestSpider;
-
-    #[test]
-    fn request_builder_sets_fields() {
-        let req = Request::<()>::new("https://example.com")
-            .with_method("POST")
-            .with_header("Accept", "text/html")
-            .with_param("q", "1")
-            .with_data(vec![1, 2])
-            .with_json(Item::from(1))
-            .with_meta("trace", Item::from("abc"))
-            .with_dont_filter(true)
-            .with_priority(5);
-
-        assert_eq!(req.url, "https://example.com");
-        assert_eq!(req.method, "POST");
-        assert_eq!(
-            req.headers.get("Accept").map(String::as_str),
-            Some("text/html")
-        );
-        assert_eq!(req.params.get("q").map(String::as_str), Some("1"));
-        assert_eq!(req.data.as_ref().map(Vec::len), Some(2));
-        assert_eq!(req.json.as_ref().and_then(|v| v.as_i64()), Some(1));
-        assert_eq!(req.meta.get("trace").and_then(|v| v.as_str()), Some("abc"));
-        assert!(req.dont_filter);
-        assert_eq!(req.priority, 5);
-    }
 
     #[test]
     fn request_replace_updates_clone() {
@@ -218,6 +336,77 @@ mod tests {
         assert_eq!(updated.priority, 10);
     }
 
+    #[test]
+    fn request_get_and_post_set_method() {
+        let get = Request::<()>::get("https://example.com");
+        let post = Request::<()>::post("https://example.com");
+        assert_eq!(get.method, "GET");
+        assert_eq!(post.method, "POST");
+    }
+
+    #[test]
+    fn request_bulk_inserts_headers_params_and_meta() {
+        let req = Request::<()>::new("https://example.com")
+            .with_headers([("Accept", "text/html"), ("X-Trace", "1")])
+            .with_params([("q", "rust"), ("page", "2")])
+            .with_meta_entries([("trace", Item::from("abc"))]);
+
+        assert_eq!(
+            req.headers.get("Accept").map(String::as_str),
+            Some("text/html")
+        );
+        assert_eq!(req.headers.get("X-Trace").map(String::as_str), Some("1"));
+        assert_eq!(req.params.get("q").map(String::as_str), Some("rust"));
+        assert_eq!(req.params.get("page").map(String::as_str), Some("2"));
+        assert_eq!(req.meta.get("trace").and_then(|v| v.as_str()), Some("abc"));
+    }
+
+    #[test]
+    fn request_meta_helpers_set_common_types() {
+        let req = Request::<()>::new("https://example.com")
+            .with_meta_str("trace", "abc")
+            .with_meta_bool("flag", true)
+            .with_meta_number("count", 7u64);
+
+        assert_eq!(req.meta.get("trace").and_then(|v| v.as_str()), Some("abc"));
+        assert_eq!(req.meta.get("flag").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(req.meta.get("count").and_then(|v| v.as_u64()), Some(7));
+    }
+
+    #[test]
+    fn request_builder_sets_fields() {
+        let req = Request::<()>::builder("https://example.com/search")
+            .header("Accept", "text/html")
+            .param("q", "rust")
+            .json(Item::from(1))
+            .data(vec![1, 2, 3])
+            .dont_filter(true)
+            .priority(9)
+            .build();
+
+        assert_eq!(req.url, "https://example.com/search");
+        assert_eq!(
+            req.headers.get("Accept").map(String::as_str),
+            Some("text/html")
+        );
+        assert_eq!(req.params.get("q").map(String::as_str), Some("rust"));
+        assert_eq!(req.json.as_ref().and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(req.data.as_ref().map(Vec::len), Some(3));
+        assert!(req.dont_filter);
+        assert_eq!(req.priority, 9);
+    }
+
+    #[tokio::test]
+    async fn request_builder_callback_sets_closure() {
+        let req = Request::<TestSpider>::builder("https://example.com")
+            .callback_fn(|_spider: Arc<TestSpider>, _response: Response<TestSpider>| async {
+                Vec::new()
+            })
+            .build();
+
+        assert!(req.callback.is_some());
+    }
+
     #[tokio::test]
     async fn callback_from_fn_wraps_function() {
         async fn handler(
@@ -229,6 +418,48 @@ mod tests {
 
         let callback = callback_from_fn(handler);
         let request = Request::<TestSpider>::new("https://example.com");
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+
+        let outputs = callback(Arc::new(TestSpider), response).await;
+        assert_eq!(outputs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn callback_from_accepts_closure() {
+        let suffix = "ok".to_string();
+        let callback = callback_from(move |_spider: Arc<TestSpider>, _response: Response<TestSpider>| {
+            let suffix = suffix.clone();
+            async move { vec![Item::from(suffix).into()] }
+        });
+
+        let request = Request::<TestSpider>::new("https://example.com");
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+
+        let outputs = callback(Arc::new(TestSpider), response).await;
+        assert_eq!(outputs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_with_callback_fn_accepts_closure() {
+        let request = Request::<TestSpider>::new("https://example.com").with_callback_fn(
+            |_spider: Arc<TestSpider>, _response: Response<TestSpider>| async {
+                vec![Item::from("ok").into()]
+            },
+        );
+
+        let callback = request.callback.clone().expect("callback");
         let response = Response {
             url: "https://example.com".to_string(),
             status: 200,

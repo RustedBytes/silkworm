@@ -7,6 +7,7 @@ pub mod http;
 pub mod logging;
 pub mod middlewares;
 pub mod pipelines;
+pub mod prelude;
 pub mod request;
 pub mod response;
 pub mod runner;
@@ -24,12 +25,12 @@ pub use middlewares::{
 };
 pub use pipelines::{CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, XmlPipeline};
 pub use request::{
-    Callback, CallbackFuture, Request, SpiderOutput, SpiderResult, callback_from_fn,
+    Callback, CallbackFuture, Request, SpiderOutput, SpiderResult, callback_from, callback_from_fn,
 };
 pub use response::{HtmlElement, HtmlResponse, Response};
 pub use runner::{RunConfig, crawl, crawl_with, run_spider, run_spider_with};
 pub use spider::Spider;
-pub use types::{Headers, Item, Meta, Params};
+pub use types::{Headers, Item, Meta, Params, item_from, item_into};
 
 #[cfg(test)]
 mod tests {

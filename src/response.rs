@@ -45,6 +45,28 @@ impl<S> Response<S> {
         decode_body(&self.body, &self.headers).1
     }
 
+    pub fn status_ok(&self) -> bool {
+        (200..=299).contains(&self.status)
+    }
+
+    pub fn is_redirect(&self) -> bool {
+        matches!(self.status, 301 | 302 | 303 | 307 | 308)
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        if let Some(value) = self.headers.get(name) {
+            return Some(value.as_str());
+        }
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub fn content_type(&self) -> Option<&str> {
+        self.header("content-type")
+    }
+
     pub fn url_join(&self, href: &str) -> String {
         match Url::parse(&self.url) {
             Ok(base) => base
@@ -60,6 +82,23 @@ impl<S> Response<S> {
         let mut req = Request::new(url);
         req.callback = callback.or_else(|| self.request.callback.clone());
         req
+    }
+
+    pub fn follow_url(&self, href: &str) -> Request<S> {
+        self.follow(href, None)
+    }
+
+    pub fn follow_urls<I, H>(&self, hrefs: I) -> Vec<Request<S>>
+    where
+        I: IntoIterator<Item = H>,
+        H: AsRef<str>,
+    {
+        hrefs
+            .into_iter()
+            .map(|href| href.as_ref())
+            .filter(|href| !href.is_empty())
+            .map(|href| self.follow_url(href))
+            .collect()
     }
 
     pub fn follow_all<I, H>(&self, hrefs: I, callback: Option<Callback<S>>) -> Vec<Request<S>>
@@ -735,8 +774,9 @@ fn encoding_from_bom(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::Response;
-    use crate::request::Request;
+    use crate::request::{Request, SpiderResult, callback_from_fn};
     use crate::types::Headers;
+    use std::sync::Arc;
 
     #[test]
     fn response_url_join_resolves_relative() {
@@ -769,6 +809,31 @@ mod tests {
     }
 
     #[test]
+    fn follow_url_preserves_callback() {
+        async fn handler(
+            _spider: Arc<()>,
+            _response: Response<()>,
+        ) -> SpiderResult<()> {
+            Vec::new()
+        }
+
+        let callback = callback_from_fn(handler);
+        let mut request = Request::<()>::new("https://example.com");
+        request.callback = Some(callback);
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+
+        let next = response.follow_url("/next");
+        assert!(next.callback.is_some());
+        assert_eq!(next.url, "https://example.com/next");
+    }
+
+    #[test]
     fn looks_like_html_detects_content_type() {
         let mut headers = Headers::new();
         headers.insert("content-type".to_string(), "text/html".to_string());
@@ -780,6 +845,45 @@ mod tests {
             request: Request::<()>::new("https://example.com"),
         };
         assert!(response.looks_like_html());
+    }
+
+    #[test]
+    fn status_helpers_report_success_and_redirects() {
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 204,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        assert!(response.status_ok());
+        assert!(!response.is_redirect());
+
+        let redirect = Response {
+            url: "https://example.com".to_string(),
+            status: 302,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        assert!(redirect.is_redirect());
+    }
+
+    #[test]
+    fn header_and_content_type_helpers_handle_case() {
+        let mut headers = Headers::new();
+        headers.insert("Content-Type".to_string(), "text/html".to_string());
+        headers.insert("X-Trace".to_string(), "abc".to_string());
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers,
+            body: Vec::new(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        assert_eq!(response.header("content-type"), Some("text/html"));
+        assert_eq!(response.header("X-TRACE"), Some("abc"));
+        assert_eq!(response.content_type(), Some("text/html"));
     }
 
     #[test]
@@ -908,6 +1012,23 @@ mod tests {
         };
         let hrefs = vec!["/one", "", "two", ""];
         let requests = response.follow_many(hrefs, None);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, "https://example.com/one");
+        assert_eq!(requests[1].url, "https://example.com/base/two");
+    }
+
+    #[test]
+    fn follow_urls_filters_empty_strings() {
+        let request = Request::<()>::new("https://example.com/base/");
+        let response = Response {
+            url: "https://example.com/base/".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+        let hrefs = vec!["/one", "", "two"];
+        let requests = response.follow_urls(hrefs);
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].url, "https://example.com/one");
         assert_eq!(requests[1].url, "https://example.com/base/two");

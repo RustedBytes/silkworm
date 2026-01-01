@@ -1,20 +1,40 @@
 use regex::Regex;
-use serde_json::{Number, Value};
-use std::future;
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{
-    CallbackFuture, DelayMiddleware, HtmlResponse, JsonLinesPipeline, Request, Response,
-    RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, Spider, SpiderResult, UserAgentMiddleware,
-    callback_from_fn, run_spider_with,
-};
+use silkworm::{Response, prelude::*, run_spider_with};
 
 struct SitemapSpider {
     sitemap_url: String,
     max_pages: Option<usize>,
     pages_seen: AtomicUsize,
+}
+
+#[derive(Debug, Serialize)]
+struct SitemapItem {
+    url: String,
+    status: u16,
+    title: Option<String>,
+    canonical_url: Option<String>,
+    meta_description: Option<String>,
+    meta_keywords: Option<String>,
+    author: Option<String>,
+    robots: Option<String>,
+    viewport: Option<String>,
+    og_title: Option<String>,
+    og_description: Option<String>,
+    og_type: Option<String>,
+    og_url: Option<String>,
+    og_image: Option<String>,
+    og_site_name: Option<String>,
+    og_locale: Option<String>,
+    twitter_card: Option<String>,
+    twitter_title: Option<String>,
+    twitter_description: Option<String>,
+    twitter_image: Option<String>,
+    twitter_site: Option<String>,
 }
 
 impl SitemapSpider {
@@ -27,57 +47,73 @@ impl SitemapSpider {
     }
 
     async fn parse_page(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
-        let mut item = serde_json::Map::new();
-        item.insert("url".to_string(), Value::String(response.url.clone()));
-        item.insert(
-            "status".to_string(),
-            Value::Number(Number::from(u64::from(response.status))),
-        );
+        let mut item = SitemapItem {
+            url: response.url.clone(),
+            status: response.status,
+            title: None,
+            canonical_url: None,
+            meta_description: None,
+            meta_keywords: None,
+            author: None,
+            robots: None,
+            viewport: None,
+            og_title: None,
+            og_description: None,
+            og_type: None,
+            og_url: None,
+            og_image: None,
+            og_site_name: None,
+            og_locale: None,
+            twitter_card: None,
+            twitter_title: None,
+            twitter_description: None,
+            twitter_image: None,
+            twitter_site: None,
+        };
 
-        if let Ok(Some(title_el)) = response.select_first("title") {
-            let title = title_el.text().trim().to_string();
-            if !title.is_empty() {
-                item.insert("title".to_string(), Value::String(title));
+        let title = response.text_from("title");
+        let title = title.trim();
+        if !title.is_empty() {
+            item.title = Some(title.to_string());
+        }
+
+        if let Some(href) = response.attr_from("link[rel='canonical']", "href") {
+            item.canonical_url = Some(href);
+        }
+
+        for meta in response.select_or_empty("meta") {
+            let name = meta.attr("name").or_else(|| meta.attr("property"));
+            let content = meta.attr("content");
+            let Some(name) = name else { continue };
+            let Some(content) = content else { continue };
+            let value = content.trim().to_string();
+            match name.to_lowercase().as_str() {
+                "description" => item.meta_description = Some(value),
+                "keywords" => item.meta_keywords = Some(value),
+                "author" => item.author = Some(value),
+                "robots" => item.robots = Some(value),
+                "viewport" => item.viewport = Some(value),
+                "og:title" => item.og_title = Some(value),
+                "og:description" => item.og_description = Some(value),
+                "og:type" => item.og_type = Some(value),
+                "og:url" => item.og_url = Some(value),
+                "og:image" => item.og_image = Some(value),
+                "og:site_name" => item.og_site_name = Some(value),
+                "og:locale" => item.og_locale = Some(value),
+                "twitter:card" => item.twitter_card = Some(value),
+                "twitter:title" => item.twitter_title = Some(value),
+                "twitter:description" => item.twitter_description = Some(value),
+                "twitter:image" => item.twitter_image = Some(value),
+                "twitter:site" => item.twitter_site = Some(value),
+                _ => continue,
             }
         }
 
-        if let Ok(Some(canonical_el)) = response.select_first("link[rel='canonical']") {
-            if let Some(href) = canonical_el.attr("href") {
-                item.insert("canonical_url".to_string(), Value::String(href));
-            }
+        if let Ok(item) = item_from(item) {
+            vec![item.into()]
+        } else {
+            Vec::new()
         }
-
-        if let Ok(meta_tags) = response.select("meta") {
-            for meta in meta_tags {
-                let name = meta.attr("name").or_else(|| meta.attr("property"));
-                let content = meta.attr("content");
-                let Some(name) = name else { continue };
-                let Some(content) = content else { continue };
-                let key = match name.to_lowercase().as_str() {
-                    "description" => "meta_description",
-                    "keywords" => "meta_keywords",
-                    "author" => "author",
-                    "robots" => "robots",
-                    "viewport" => "viewport",
-                    "og:title" => "og_title",
-                    "og:description" => "og_description",
-                    "og:type" => "og_type",
-                    "og:url" => "og_url",
-                    "og:image" => "og_image",
-                    "og:site_name" => "og_site_name",
-                    "og:locale" => "og_locale",
-                    "twitter:card" => "twitter_card",
-                    "twitter:title" => "twitter_title",
-                    "twitter:description" => "twitter_description",
-                    "twitter:image" => "twitter_image",
-                    "twitter:site" => "twitter_site",
-                    _ => continue,
-                };
-                item.insert(key.to_string(), Value::String(content.trim().to_string()));
-            }
-        }
-
-        vec![Value::Object(item).into()]
     }
 }
 
@@ -88,9 +124,9 @@ impl Spider for SitemapSpider {
 
     async fn start_requests(&self) -> Vec<Request<Self>> {
         vec![
-            Request::new(self.sitemap_url.clone())
-                .with_callback(callback_from_fn(parse_sitemap))
-                .with_meta("allow_non_html", Value::Bool(true))
+            Request::get(self.sitemap_url.clone())
+                .with_callback_fn(parse_sitemap)
+                .with_meta_bool("allow_non_html", true)
                 .with_dont_filter(true),
         ]
     }
@@ -100,11 +136,11 @@ impl Spider for SitemapSpider {
     }
 }
 
-fn parse_sitemap(
+async fn parse_sitemap(
     spider: Arc<SitemapSpider>,
     response: Response<SitemapSpider>,
-) -> CallbackFuture<SitemapSpider> {
-    Box::pin(future::ready(parse_sitemap_inner(spider, response)))
+) -> SpiderResult<SitemapSpider> {
+    parse_sitemap_inner(spider, response)
 }
 
 fn parse_sitemap_inner(
@@ -135,9 +171,9 @@ fn parse_sitemap_inner(
     let mut out = Vec::new();
     for url in urls {
         if is_index {
-            let req = Request::new(url)
-                .with_callback(callback_from_fn(parse_sitemap))
-                .with_meta("allow_non_html", Value::Bool(true))
+            let req = Request::get(url)
+                .with_callback_fn(parse_sitemap)
+                .with_meta_bool("allow_non_html", true)
                 .with_dont_filter(true);
             out.push(req.into());
             continue;
@@ -150,7 +186,7 @@ fn parse_sitemap_inner(
             }
         }
 
-        let req = Request::new(url).with_dont_filter(true);
+        let req = Request::builder(url).dont_filter(true).build();
         out.push(req.into());
     }
 
@@ -221,15 +257,12 @@ fn main() -> silkworm::SilkwormResult<()> {
         }
     };
 
-    let mut config = RunConfig::default();
-    config.concurrency = concurrency;
-    config.request_middlewares = vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
+    let mut request_middlewares: Vec<Arc<dyn RequestMiddleware<SitemapSpider>>> =
+        vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
     if delay > 0.0 {
-        config
-            .request_middlewares
-            .push(Arc::new(DelayMiddleware::fixed(delay)));
+        request_middlewares.push(Arc::new(DelayMiddleware::fixed(delay)));
     }
-    config.response_middlewares = vec![
+    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<SitemapSpider>>> = vec![
         Arc::new(RetryMiddleware::new(
             3,
             None,
@@ -238,10 +271,14 @@ fn main() -> silkworm::SilkwormResult<()> {
         )),
         Arc::new(SkipNonHtmlMiddleware::new(None, 1024)),
     ];
-    config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new(output))];
-    config.request_timeout = Some(Duration::from_secs(30));
-    config.log_stats_interval = Some(Duration::from_secs(10));
-    config.html_max_size_bytes = 2_000_000;
+
+    let config = RunConfig::new()
+        .with_concurrency(concurrency)
+        .with_middlewares(request_middlewares, response_middlewares)
+        .with_item_pipeline(JsonLinesPipeline::new(output))
+        .with_request_timeout(Duration::from_secs(30))
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_html_max_size_bytes(2_000_000);
 
     run_spider_with(SitemapSpider::new(sitemap_url, pages), config)
 }

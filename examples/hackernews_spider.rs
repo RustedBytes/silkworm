@@ -1,16 +1,25 @@
-use serde_json::{Number, Value};
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{
-    DelayMiddleware, HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider,
-    SpiderResult, UserAgentMiddleware, run_spider_with,
-};
+use silkworm::{prelude::*, run_spider_with};
 
 struct HackerNewsSpider {
     max_pages: usize,
     pages_seen: AtomicUsize,
+}
+
+#[derive(Debug, Serialize)]
+struct HackerNewsItem {
+    title: String,
+    url: String,
+    author: Option<String>,
+    points: Option<u64>,
+    comments: Option<u64>,
+    rank: Option<u64>,
+    age: Option<String>,
+    post_id: Option<u64>,
 }
 
 impl HackerNewsSpider {
@@ -35,24 +44,14 @@ impl Spider for HackerNewsSpider {
         let mut out = Vec::new();
 
         let page = self.pages_seen.fetch_add(1, Ordering::SeqCst) + 1;
-        let rows = match response.select("tr.athing") {
-            Ok(nodes) => nodes,
-            Err(_) => return out,
-        };
-
-        for row in rows {
+        for row in response.select_or_empty("tr.athing") {
             let post_id = row.attr("id");
 
             let rank = row
-                .select_first(".rank")
-                .ok()
-                .flatten()
+                .select_first_or_none(".rank")
                 .and_then(|el| extract_number(&el.text()));
 
-            let title_el = row
-                .select_first("span.titleline a, a.storylink")
-                .ok()
-                .flatten();
+            let title_el = row.select_first_or_none("span.titleline a, a.storylink");
             let title = title_el.as_ref().map(|el| el.text()).unwrap_or_default();
             let href = title_el.and_then(|el| el.attr("href"));
             let url = href
@@ -61,21 +60,16 @@ impl Spider for HackerNewsSpider {
                 .unwrap_or_default();
 
             let subtext = post_id.as_ref().and_then(|id| {
-                response
-                    .select_first(&format!("tr.athing[id='{id}'] + tr .subtext"))
-                    .ok()
-                    .flatten()
+                response.select_first_or_none(&format!("tr.athing[id='{id}'] + tr .subtext"))
             });
 
             let points = subtext
                 .as_ref()
-                .and_then(|el| el.select_first(".score").ok().flatten())
+                .and_then(|el| el.select_first_or_none(".score"))
                 .and_then(|el| extract_number(&el.text()));
 
             let comments = subtext.as_ref().and_then(|el| {
-                el.select("a")
-                    .ok()
-                    .unwrap_or_default()
+                el.select_or_empty("a")
                     .into_iter()
                     .find_map(|link| {
                         let text = link.text().to_lowercase();
@@ -89,51 +83,42 @@ impl Spider for HackerNewsSpider {
 
             let author = subtext
                 .as_ref()
-                .and_then(|el| el.select_first("a.hnuser").ok().flatten())
+                .and_then(|el| el.select_first_or_none("a.hnuser"))
                 .map(|el| el.text());
 
             let age = subtext
                 .as_ref()
-                .and_then(|el| el.select_first(".age a").ok().flatten())
+                .and_then(|el| el.select_first_or_none(".age a"))
                 .map(|el| el.text());
 
-            let mut item = serde_json::Map::new();
-            item.insert("title".to_string(), Value::String(title));
-            item.insert("url".to_string(), Value::String(url));
-
-            if let Some(author) = author {
-                item.insert("author".to_string(), Value::String(author));
+            let post_id = post_id.as_ref().and_then(|id| extract_number(id));
+            let item = HackerNewsItem {
+                title,
+                url,
+                author,
+                points,
+                comments,
+                rank,
+                age,
+                post_id,
+            };
+            if let Ok(item) = item_from(item) {
+                out.push(item.into());
             }
-            if let Some(points) = points {
-                item.insert("points".to_string(), Value::Number(Number::from(points)));
-            }
-            if let Some(comments) = comments {
-                item.insert(
-                    "comments".to_string(),
-                    Value::Number(Number::from(comments)),
-                );
-            }
-            if let Some(rank) = rank {
-                item.insert("rank".to_string(), Value::Number(Number::from(rank)));
-            }
-            if let Some(age) = age {
-                item.insert("age".to_string(), Value::String(age));
-            }
-            if let Some(post_id) = post_id {
-                if let Some(id_value) = extract_number(&post_id) {
-                    item.insert("post_id".to_string(), Value::Number(Number::from(id_value)));
-                }
-            }
-
-            out.push(Value::Object(item).into());
         }
 
         if page < self.max_pages {
-            if let Ok(Some(link)) = response.select_first("a.morelink") {
-                if let Some(href) = link.attr("href") {
-                    out.push(response.follow(&href, None).into());
-                }
-            }
+            let next_links = response
+                .select_or_empty("a.morelink")
+                .into_iter()
+                .filter_map(|link| link.attr("href"))
+                .collect::<Vec<_>>();
+            out.extend(
+                response
+                    .follow_urls(next_links)
+                    .into_iter()
+                    .map(Into::into),
+            );
         }
 
         out
@@ -173,20 +158,18 @@ fn parse_pages_arg() -> usize {
 fn main() -> silkworm::SilkwormResult<()> {
     let pages = parse_pages_arg();
 
-    let mut config = RunConfig::default();
-    config.request_middlewares = vec![
+    let request_middlewares: Vec<Arc<dyn RequestMiddleware<HackerNewsSpider>>> = vec![
         Arc::new(UserAgentMiddleware::new(vec![], None)),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
-    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(
-        3,
-        None,
-        Some(vec![403]),
-        0.5,
-    ))];
-    config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/hackernews.jl"))];
-    config.request_timeout = Some(Duration::from_secs(10));
-    config.log_stats_interval = Some(Duration::from_secs(10));
+    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<HackerNewsSpider>>> =
+        vec![Arc::new(RetryMiddleware::new(3, None, Some(vec![403]), 0.5))];
+
+    let config = RunConfig::new()
+        .with_middlewares(request_middlewares, response_middlewares)
+        .with_item_pipeline(JsonLinesPipeline::new("data/hackernews.jl"))
+        .with_request_timeout(Duration::from_secs(10))
+        .with_log_stats_interval(Duration::from_secs(10));
 
     run_spider_with(HackerNewsSpider::new(pages), config)
 }

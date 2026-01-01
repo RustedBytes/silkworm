@@ -1,13 +1,16 @@
-use serde_json::json;
-use std::sync::Arc;
+use serde::Serialize;
 use std::time::Duration;
 
-use silkworm::{
-    HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider, SpiderResult,
-    UserAgentMiddleware, run_spider_with,
-};
+use silkworm::{prelude::*, run_spider_with};
 
 struct QuotesSpider;
+
+#[derive(Debug, Serialize)]
+struct QuoteItem {
+    text: String,
+    author: String,
+    tags: Vec<String>,
+}
 
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
@@ -21,55 +24,53 @@ impl Spider for QuotesSpider {
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
         let mut out = Vec::new();
 
-        let quotes = match response.select(".quote") {
-            Ok(nodes) => nodes,
-            Err(_) => return out,
-        };
+        for quote in response.select_or_empty(".quote") {
+            let text = quote.text_from(".text");
+            let author = quote.text_from(".author");
+            if text.is_empty() || author.is_empty() {
+                continue;
+            }
+            let tag_values = quote
+                .select_or_empty(".tag")
+                .into_iter()
+                .map(|tag| tag.text())
+                .collect::<Vec<_>>();
 
-        for quote in quotes {
-            let text_el = match quote.select_first(".text") {
-                Ok(Some(el)) => el,
-                _ => continue,
+            let quote = QuoteItem {
+                text,
+                author,
+                tags: tag_values,
             };
-            let author_el = match quote.select_first(".author") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-            let tags = match quote.select(".tag") {
-                Ok(nodes) => nodes,
-                Err(_) => Vec::new(),
-            };
-            let tag_values = tags.into_iter().map(|tag| tag.text()).collect::<Vec<_>>();
-
-            out.push(
-                json!({
-                    "text": text_el.text(),
-                    "author": author_el.text(),
-                    "tags": tag_values,
-                })
-                .into(),
-            );
-        }
-
-        if let Ok(Some(link)) = response.select_first("li.next > a") {
-            if let Some(href) = link.attr("href") {
-                out.push(response.follow(&href, None).into());
+            if let Ok(item) = item_from(quote) {
+                out.push(item.into());
             }
         }
+
+        let next_links = response
+            .select_or_empty("li.next > a")
+            .into_iter()
+            .filter_map(|link| link.attr("href"))
+            .collect::<Vec<_>>();
+        out.extend(
+            response
+                .follow_urls(next_links)
+                .into_iter()
+                .map(Into::into),
+        );
 
         out
     }
 }
 
 fn main() -> silkworm::SilkwormResult<()> {
-    let mut config = RunConfig::default();
-    config.request_middlewares = vec![Arc::new(UserAgentMiddleware::new(
-        vec![],
-        Some("silkworm-rs/0.1".to_string()),
-    ))];
-    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(3, None, None, 0.5))];
-    config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/quotes.jl"))];
-    config.request_timeout = Some(Duration::from_secs(10));
-    config.log_stats_interval = Some(Duration::from_secs(10));
+    let config = RunConfig::new()
+        .with_request_middleware(UserAgentMiddleware::new(
+            vec![],
+            Some("silkworm-rs/0.1".to_string()),
+        ))
+        .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
+        .with_item_pipeline(JsonLinesPipeline::new("data/quotes.jl"))
+        .with_request_timeout(Duration::from_secs(10))
+        .with_log_stats_interval(Duration::from_secs(10));
     run_spider_with(QuotesSpider, config)
 }

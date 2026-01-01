@@ -1,15 +1,18 @@
-use serde_json::json;
-use std::sync::Arc;
+use serde::Serialize;
 use std::time::Duration;
 
-use silkworm::{
-    HtmlResponse, JsonLinesPipeline, RetryMiddleware, RunConfig, Spider, SpiderResult,
-    UserAgentMiddleware, run_spider_with,
-};
+use silkworm::{prelude::*, run_spider_with};
 
 /// Demonstrates the new ergonomic API for selecting elements.
 /// Compare this with the original quotes_spider.rs to see the improvements.
 struct QuotesSpider;
+
+#[derive(Debug, Serialize)]
+struct QuoteItem {
+    text: String,
+    author: String,
+    tags: Vec<String>,
+}
 
 impl Spider for QuotesSpider {
     fn name(&self) -> &str {
@@ -41,34 +44,42 @@ impl Spider for QuotesSpider {
                 .map(|tag| tag.text())
                 .collect::<Vec<_>>();
 
-            out.push(
-                json!({
-                    "text": text,
-                    "author": author,
-                    "tags": tag_values,
-                })
-                .into(),
-            );
+            let quote = QuoteItem {
+                text,
+                author,
+                tags: tag_values,
+            };
+            if let Ok(item) = item_from(quote) {
+                out.push(item.into());
+            }
         }
 
         // Using select_first_or_none() and attr_from() for cleaner pagination
-        if let Some(href) = response.attr_from("li.next > a", "href") {
-            out.push(response.follow(&href, None).into());
-        }
+        let next_links = response
+            .select_or_empty("li.next > a")
+            .into_iter()
+            .filter_map(|link| link.attr("href"))
+            .collect::<Vec<_>>();
+        out.extend(
+            response
+                .follow_urls(next_links)
+                .into_iter()
+                .map(Into::into),
+        );
 
         out
     }
 }
 
 fn main() -> silkworm::SilkwormResult<()> {
-    let mut config = RunConfig::default();
-    config.request_middlewares = vec![Arc::new(UserAgentMiddleware::new(
-        vec![],
-        Some("silkworm-rs/0.1".to_string()),
-    ))];
-    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(3, None, None, 0.5))];
-    config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/quotes_ergonomic.jl"))];
-    config.request_timeout = Some(Duration::from_secs(10));
-    config.log_stats_interval = Some(Duration::from_secs(10));
+    let config = RunConfig::new()
+        .with_request_middleware(UserAgentMiddleware::new(
+            vec![],
+            Some("silkworm-rs/0.1".to_string()),
+        ))
+        .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
+        .with_item_pipeline(JsonLinesPipeline::new("data/quotes_ergonomic.jl"))
+        .with_request_timeout(Duration::from_secs(10))
+        .with_log_stats_interval(Duration::from_secs(10));
     run_spider_with(QuotesSpider, config)
 }

@@ -93,12 +93,9 @@ async fn main() -> silkworm::SilkwormResult<()> {
 Write scraped items to files or plug in your own callback:
 
 ```rust
-use std::sync::Arc;
-
 use silkworm::{run_spider_with, JsonLinesPipeline, RunConfig};
 
-let mut config = RunConfig::default();
-config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/items.jl"))];
+let config = RunConfig::new().with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
 run_spider_with(QuotesSpider, config)?;
 ```
 
@@ -114,31 +111,29 @@ Available pipelines:
 Enable built-ins by adding them to the run config:
 
 ```rust
-use std::sync::Arc;
 use std::time::Duration;
 
 use silkworm::{
     DelayMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, UserAgentMiddleware,
 };
 
-let mut config = RunConfig::default();
-config.request_middlewares = vec![
-    Arc::new(UserAgentMiddleware::new(vec![], Some("silkworm-rs/0.1".to_string()))),
-    Arc::new(DelayMiddleware::fixed(0.25)),
-];
-config.response_middlewares = vec![
-    Arc::new(RetryMiddleware::new(3, None, None, 0.5)),
-    Arc::new(SkipNonHtmlMiddleware::new(None, 1024)),
-];
-config.request_timeout = Some(Duration::from_secs(15));
+let config = RunConfig::new()
+    .with_request_middleware(UserAgentMiddleware::new(
+        vec![],
+        Some("silkworm-rs/0.1".to_string()),
+    ))
+    .with_request_middleware(DelayMiddleware::fixed(0.25))
+    .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
+    .with_response_middleware(SkipNonHtmlMiddleware::new(None, 1024))
+    .with_request_timeout(Duration::from_secs(15));
 ```
 
 ## Request Helpers
 
-`Response::follow` carries the current callback by default:
+`Response::follow_url` carries the current callback by default:
 
 ```rust
-let next = response.follow("/page/2", None);
+let next = response.follow_url("/page/2");
 ```
 
 You can also build new requests fluently:
@@ -146,9 +141,9 @@ You can also build new requests fluently:
 ```rust
 use silkworm::Request;
 
-let request = Request::new("https://example.com/search")
-    .with_param("q", "rust")
-    .with_header("Accept", "text/html");
+let request = Request::get("https://example.com/search")
+    .with_params([("q", "rust"), ("page", "1")])
+    .with_headers([("Accept", "text/html"), ("User-Agent", "silkworm-rs/0.1")]);
 ```
 
 ## Ergonomic Selectors
@@ -185,12 +180,12 @@ All these methods work with CSS selectors and XPath (use `xpath_or_empty()`, `xp
 use std::time::Duration;
 use silkworm::RunConfig;
 
-let mut config = RunConfig::default();
-config.concurrency = 32;
-config.max_pending_requests = Some(500);
-config.request_timeout = Some(Duration::from_secs(10));
-config.html_max_size_bytes = 2_000_000;
-config.keep_alive = true;
+let config = RunConfig::new()
+    .with_concurrency(32)
+    .with_max_pending_requests(500)
+    .with_request_timeout(Duration::from_secs(10))
+    .with_html_max_size_bytes(2_000_000)
+    .with_keep_alive(true);
 ```
 
 ## Logging

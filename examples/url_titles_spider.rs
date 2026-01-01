@@ -5,10 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use silkworm::{
-    HtmlResponse, JsonLinesPipeline, Request, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
-    Spider, SpiderResult, UserAgentMiddleware, run_spider_with,
-};
+use silkworm::{prelude::*, run_spider_with};
 
 struct UrlTitlesSpider {
     urls_path: PathBuf,
@@ -127,10 +124,11 @@ impl Spider for UrlTitlesSpider {
             if url.is_empty() {
                 continue;
             }
-            let mut req = Request::new(url);
-            req.meta.insert("record".to_string(), Value::Object(record));
-            req.dont_filter = true;
-            out.push(req);
+            out.push(
+                Request::get(url)
+                    .with_meta_entries([("record", Value::Object(record))])
+                    .with_dont_filter(true),
+            );
         }
 
         out
@@ -142,12 +140,8 @@ impl Spider for UrlTitlesSpider {
             _ => Map::new(),
         };
 
-        let title = response
-            .select_first("title")
-            .ok()
-            .flatten()
-            .map(|el| el.text().trim().to_string())
-            .unwrap_or_default();
+        let title = response.text_from("title");
+        let title = title.trim().to_string();
 
         record.insert("page_title".to_string(), Value::String(title));
         record.insert("final_url".to_string(), Value::String(response.url.clone()));
@@ -156,7 +150,8 @@ impl Spider for UrlTitlesSpider {
             Value::Number(Number::from(u64::from(response.status))),
         );
 
-        vec![Value::Object(record).into()]
+        let item = item_from(&record).unwrap_or(Value::Object(record));
+        vec![item.into()]
     }
 }
 
@@ -200,18 +195,21 @@ fn main() -> silkworm::SilkwormResult<()> {
         }
     };
 
-    let mut config = RunConfig::default();
-    config.concurrency = 128;
-    config.request_middlewares = vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
-    config.response_middlewares = vec![
+    let request_middlewares: Vec<Arc<dyn RequestMiddleware<UrlTitlesSpider>>> =
+        vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
+    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<UrlTitlesSpider>>> = vec![
         Arc::new(RetryMiddleware::new(3, None, Some(vec![403, 429]), 0.5)),
         Arc::new(SkipNonHtmlMiddleware::new(None, 1024)),
     ];
-    config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new(output))];
-    config.request_timeout = Some(Duration::from_secs(5));
-    config.log_stats_interval = Some(Duration::from_secs(10));
-    config.html_max_size_bytes = 1_000_000;
-    config.keep_alive = true;
+
+    let config = RunConfig::new()
+        .with_concurrency(128)
+        .with_middlewares(request_middlewares, response_middlewares)
+        .with_item_pipeline(JsonLinesPipeline::new(output))
+        .with_request_timeout(Duration::from_secs(5))
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_html_max_size_bytes(1_000_000)
+        .with_keep_alive(true);
 
     run_spider_with(UrlTitlesSpider::new(urls_file), config)
 }

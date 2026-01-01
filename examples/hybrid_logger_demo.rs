@@ -1,11 +1,17 @@
-use serde_json::json;
+use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use silkworm::{HtmlResponse, Logger, Spider, SpiderResult, get_logger, run_spider};
+use silkworm::{Logger, get_logger, prelude::*, run_spider};
 
 struct HybridLoggerSpider {
     logger: Logger,
     pages_seen: AtomicUsize,
+}
+
+#[derive(Debug, Serialize)]
+struct QuoteItem {
+    text: String,
+    author: String,
 }
 
 impl HybridLoggerSpider {
@@ -37,36 +43,31 @@ impl Spider for HybridLoggerSpider {
         );
         let mut out = Vec::new();
 
-        let quotes = match response.select(".quote") {
-            Ok(nodes) => nodes,
-            Err(_) => return out,
-        };
+        for quote in response.select_or_empty(".quote") {
+            let text = quote.text_from(".text");
+            let author = quote.text_from(".author");
+            if text.is_empty() || author.is_empty() {
+                continue;
+            }
 
-        for quote in quotes {
-            let text_el = match quote.select_first(".text") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-            let author_el = match quote.select_first(".author") {
-                Ok(Some(el)) => el,
-                _ => continue,
-            };
-
-            out.push(
-                json!({
-                    "text": text_el.text(),
-                    "author": author_el.text(),
-                })
-                .into(),
-            );
+            let quote = QuoteItem { text, author };
+            if let Ok(item) = item_from(quote) {
+                out.push(item.into());
+            }
         }
 
         if page < 2 {
-            if let Ok(Some(link)) = response.select_first("li.next > a") {
-                if let Some(href) = link.attr("href") {
-                    out.push(response.follow(&href, None).into());
-                }
-            }
+            let next_links = response
+                .select_or_empty("li.next > a")
+                .into_iter()
+                .filter_map(|link| link.attr("href"))
+                .collect::<Vec<_>>();
+            out.extend(
+                response
+                    .follow_urls(next_links)
+                    .into_iter()
+                    .map(Into::into),
+            );
         }
 
         out
