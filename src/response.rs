@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
@@ -122,6 +123,7 @@ impl<S> HtmlResponse<S> {
         for element in doc.select(&selector) {
             out.push(HtmlElement {
                 html: element.html(),
+                attrs: element_attrs(&element),
             });
         }
         Ok(out)
@@ -135,6 +137,7 @@ impl<S> HtmlResponse<S> {
         if let Some(element) = doc.select(&selector).next() {
             Ok(Some(HtmlElement {
                 html: element.html(),
+                attrs: element_attrs(&element),
             }))
         } else {
             Ok(None)
@@ -191,6 +194,7 @@ impl<S> DerefMut for HtmlResponse<S> {
 #[derive(Clone)]
 pub struct HtmlElement {
     html: String,
+    attrs: HashMap<String, String>,
 }
 
 impl HtmlElement {
@@ -210,10 +214,18 @@ impl HtmlElement {
     }
 
     pub fn attr(&self, name: &str) -> Option<String> {
+        if let Some(value) = self.attrs.get(name) {
+            return Some(value.clone());
+        }
+
         let doc = scraper::Html::parse_fragment(&self.html);
         let selector = scraper::Selector::parse("*").ok()?;
-        let element = doc.select(&selector).next()?;
-        element.value().attr(name).map(|value| value.to_string())
+        for element in doc.select(&selector) {
+            if let Some(value) = element.value().attr(name) {
+                return Some(value.to_string());
+            }
+        }
+        None
     }
 
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
@@ -232,6 +244,7 @@ impl HtmlElement {
         for element in doc.select(&selector) {
             out.push(HtmlElement {
                 html: element.html(),
+                attrs: element_attrs(&element),
             });
         }
         Ok(out)
@@ -247,6 +260,7 @@ impl HtmlElement {
         if let Some(element) = doc.select(&selector).next() {
             Ok(Some(HtmlElement {
                 html: element.html(),
+                attrs: element_attrs(&element),
             }))
         } else {
             Ok(None)
@@ -281,15 +295,21 @@ fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
             .into_iter()
             .map(|node| HtmlElement {
                 html: xpath_node_to_html(node),
+                attrs: HashMap::new(),
             })
             .collect(),
         Value::Boolean(value) => vec![HtmlElement {
             html: value.to_string(),
+            attrs: HashMap::new(),
         }],
         Value::Number(value) => vec![HtmlElement {
             html: value.to_string(),
+            attrs: HashMap::new(),
         }],
-        Value::String(value) => vec![HtmlElement { html: value }],
+        Value::String(value) => vec![HtmlElement {
+            html: value,
+            attrs: HashMap::new(),
+        }],
     }
 }
 
@@ -321,6 +341,14 @@ fn element_to_html(element: Element<'_>) -> String {
     push_element_name(&mut out, element);
     out.push('>');
     out
+}
+
+fn element_attrs(element: &scraper::ElementRef<'_>) -> HashMap<String, String> {
+    let mut attrs = HashMap::new();
+    for (name, value) in element.value().attrs.iter() {
+        attrs.insert(name.local.to_string(), value.to_string());
+    }
+    attrs
 }
 
 fn node_to_markup(node: Node<'_>) -> String {
