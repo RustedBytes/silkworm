@@ -350,12 +350,29 @@ fn looks_like_html<S: Spider>(
     }
 
     let len = std::cmp::min(sniff_bytes, response.body.len());
-    let snippet = String::from_utf8_lossy(&response.body[..len]).to_lowercase();
-    snippet.contains("<html")
+    let snippet = &response.body[..len];
+    contains_html_marker(snippet)
 }
 
 fn noop_callback<S: Spider>() -> Callback<S> {
     Arc::new(|_spider, _response| Box::pin(async move { Vec::new() }))
+}
+
+fn contains_html_marker(snippet: &[u8]) -> bool {
+    contains_ascii_case_insensitive(snippet, b"<html")
+        || contains_ascii_case_insensitive(snippet, b"<!doctype")
+}
+
+fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    })
 }
 
 #[cfg(test)]

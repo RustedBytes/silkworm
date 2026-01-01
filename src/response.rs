@@ -157,9 +157,7 @@ impl<S> Response<S> {
         if snippet.is_empty() {
             return false;
         }
-
-        let snippet_lower = String::from_utf8_lossy(snippet).to_lowercase();
-        snippet_lower.contains("<html") || snippet_lower.contains("<!doctype")
+        contains_html_marker(snippet)
     }
 
     pub fn close(&mut self) {
@@ -660,8 +658,9 @@ fn element_to_html(element: Element<'_>) -> String {
 }
 
 fn element_attrs(element: &scraper::ElementRef<'_>) -> HashMap<String, String> {
-    let mut attrs = HashMap::new();
-    for (name, value) in element.value().attrs.iter() {
+    let raw_attrs = &element.value().attrs;
+    let mut attrs = HashMap::with_capacity(raw_attrs.len());
+    for (name, value) in raw_attrs.iter() {
         attrs.insert(name.local.to_string(), value.to_string());
     }
     attrs
@@ -778,7 +777,9 @@ fn decode_with_label(body: &[u8], label: &str) -> Option<(String, String)> {
 
 fn encoding_from_headers(headers: &Headers) -> Option<String> {
     let content_type = headers.get("content-type")?;
-    let re = Regex::new(r#"(?i)charset=([^"'\s;]+)"#).ok()?;
+    static CHARSET_RE: OnceLock<Regex> = OnceLock::new();
+    let re = CHARSET_RE
+        .get_or_init(|| Regex::new(r#"(?i)charset=([^"'\s;]+)"#).expect("charset regex"));
     let caps = re.captures(content_type)?;
     caps.get(1).map(|m| m.as_str().to_string())
 }
@@ -787,21 +788,31 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
     let head_len = min(4096, body.len());
     let head = String::from_utf8_lossy(&body[..head_len]);
 
-    let meta_charset = Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#).ok()?;
+    static META_CHARSET_RE: OnceLock<Regex> = OnceLock::new();
+    let meta_charset = META_CHARSET_RE.get_or_init(|| {
+        Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#)
+            .expect("meta charset regex")
+    });
     if let Some(caps) = meta_charset.captures(&head) {
         return caps.get(1).map(|m| m.as_str().to_string());
     }
 
-    let meta_content_type = Regex::new(
-        r#"(?i)<meta\s+http-equiv\s*=\s*['"]?content-type['"]?[^>]*charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#,
-    )
-    .ok()?;
+    static META_CONTENT_TYPE_RE: OnceLock<Regex> = OnceLock::new();
+    let meta_content_type = META_CONTENT_TYPE_RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)<meta\s+http-equiv\s*=\s*['"]?content-type['"]?[^>]*charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#,
+        )
+        .expect("meta content-type regex")
+    });
     if let Some(caps) = meta_content_type.captures(&head) {
         return caps.get(1).map(|m| m.as_str().to_string());
     }
 
-    let xml_decl =
-        Regex::new(r#"(?i)<\?xml[^>]+encoding\s*=\s*['"]([a-zA-Z0-9._:-]+)['"]"#).ok()?;
+    static XML_DECL_RE: OnceLock<Regex> = OnceLock::new();
+    let xml_decl = XML_DECL_RE.get_or_init(|| {
+        Regex::new(r#"(?i)<\?xml[^>]+encoding\s*=\s*['"]([a-zA-Z0-9._:-]+)['"]"#)
+            .expect("xml declaration regex")
+    });
     xml_decl
         .captures(&head)
         .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
@@ -824,6 +835,23 @@ fn encoding_from_bom(body: &[u8]) -> Option<String> {
         return Some("utf-16be".to_string());
     }
     None
+}
+
+fn contains_html_marker(snippet: &[u8]) -> bool {
+    contains_ascii_case_insensitive(snippet, b"<html")
+        || contains_ascii_case_insensitive(snippet, b"<!doctype")
+}
+
+fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    })
 }
 
 #[cfg(test)]

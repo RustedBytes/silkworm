@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::Semaphore;
@@ -15,6 +15,7 @@ use crate::types::Headers;
 pub struct HttpClient {
     client: wreq::Client,
     semaphore: std::sync::Arc<Semaphore>,
+    proxy_clients: std::sync::Arc<std::sync::Mutex<HashMap<String, wreq::Client>>>,
     pub concurrency: usize,
     default_headers: Headers,
     timeout: Option<Duration>,
@@ -45,6 +46,7 @@ impl HttpClient {
         Ok(HttpClient {
             client,
             semaphore: std::sync::Arc::new(Semaphore::new(concurrency)),
+            proxy_clients: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             concurrency,
             default_headers,
             timeout,
@@ -68,11 +70,11 @@ impl HttpClient {
 
         let mut current_req = req;
         let mut redirects_followed = 0usize;
-        let mut visited: HashSet<String> = HashSet::new();
+        let mut visited = Vec::with_capacity(self.max_redirects.saturating_add(1));
 
         loop {
             let url = self.build_url(&current_req)?;
-            visited.insert(url.clone());
+            visited.push(url.clone());
 
             let proxy = current_req
                 .meta
@@ -127,7 +129,7 @@ impl HttpClient {
 
                 let location = headers.get("location").cloned().unwrap_or_default();
                 let redirect_url = resolve_redirect_url(&url, &location);
-                if visited.contains(&redirect_url) {
+                if visited.iter().any(|seen| seen == &redirect_url) {
                     return Err(SilkwormError::Http("Redirect loop detected".to_string()));
                 }
 
@@ -217,12 +219,20 @@ impl HttpClient {
     }
 
     fn build_client_with_proxy(&self, proxy_url: &str) -> SilkwormResult<wreq::Client> {
+        if let Ok(guard) = self.proxy_clients.lock() {
+            if let Some(client) = guard.get(proxy_url) {
+                return Ok(client.clone());
+            }
+        }
         let proxy = wreq::Proxy::all(proxy_url)
             .map_err(|err| SilkwormError::Http(format!("Invalid proxy {}: {}", proxy_url, err)))?;
         let client = wreq::Client::builder()
             .redirect(Policy::none())
             .proxy(proxy)
             .build()?;
+        if let Ok(mut guard) = self.proxy_clients.lock() {
+            guard.entry(proxy_url.to_string()).or_insert_with(|| client.clone());
+        }
         Ok(client)
     }
 
