@@ -169,3 +169,75 @@ where
         Box::pin(fut)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Request, SpiderOutput, callback_from_fn};
+    use crate::response::Response;
+    use crate::types::{Headers, Item};
+    use std::sync::Arc;
+
+    struct TestSpider;
+
+    #[test]
+    fn request_builder_sets_fields() {
+        let req = Request::<()>::new("https://example.com")
+            .with_method("POST")
+            .with_header("Accept", "text/html")
+            .with_param("q", "1")
+            .with_data(vec![1, 2])
+            .with_json(Item::from(1))
+            .with_meta("trace", Item::from("abc"))
+            .with_dont_filter(true)
+            .with_priority(5);
+
+        assert_eq!(req.url, "https://example.com");
+        assert_eq!(req.method, "POST");
+        assert_eq!(
+            req.headers.get("Accept").map(String::as_str),
+            Some("text/html")
+        );
+        assert_eq!(req.params.get("q").map(String::as_str), Some("1"));
+        assert_eq!(req.data.as_ref().map(Vec::len), Some(2));
+        assert_eq!(req.json.as_ref().and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(req.meta.get("trace").and_then(|v| v.as_str()), Some("abc"));
+        assert!(req.dont_filter);
+        assert_eq!(req.priority, 5);
+    }
+
+    #[test]
+    fn request_replace_updates_clone() {
+        let req = Request::<()>::new("https://example.com");
+        let updated = req.replace(|r| {
+            r.url = "https://example.com/next".to_string();
+            r.priority = 10;
+        });
+
+        assert_eq!(req.url, "https://example.com");
+        assert_eq!(updated.url, "https://example.com/next");
+        assert_eq!(updated.priority, 10);
+    }
+
+    #[tokio::test]
+    async fn callback_from_fn_wraps_function() {
+        async fn handler(
+            _spider: Arc<TestSpider>,
+            _response: Response<TestSpider>,
+        ) -> Vec<SpiderOutput<TestSpider>> {
+            vec![Item::from("ok").into()]
+        }
+
+        let callback = callback_from_fn(handler);
+        let request = Request::<TestSpider>::new("https://example.com");
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+
+        let outputs = callback(Arc::new(TestSpider), response).await;
+        assert_eq!(outputs.len(), 1);
+    }
+}

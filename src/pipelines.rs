@@ -401,3 +401,47 @@ fn escape_xml(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_xml, csv_escape, flatten_item, sanitize_tag};
+    use crate::types::Item;
+
+    #[test]
+    fn flatten_item_flattens_nested_objects_and_arrays() {
+        let mut inner = serde_json::Map::new();
+        inner.insert("name".to_string(), Item::from("Ada"));
+        inner.insert("age".to_string(), Item::from(42));
+
+        let mut outer = serde_json::Map::new();
+        outer.insert("user".to_string(), Item::Object(inner));
+        outer.insert(
+            "tags".to_string(),
+            Item::Array(vec![Item::from("a"), Item::from("b")]),
+        );
+
+        let flat = flatten_item(&Item::Object(outer));
+        assert_eq!(flat.get("user_name").map(String::as_str), Some("Ada"));
+        assert_eq!(flat.get("user_age").map(String::as_str), Some("42"));
+        assert_eq!(flat.get("tags").map(String::as_str), Some("a,b"));
+    }
+
+    #[test]
+    fn csv_escape_quotes_when_needed() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn sanitize_tag_replaces_invalid_chars() {
+        assert_eq!(sanitize_tag("my tag-name"), "my_tag_name");
+        assert_eq!(sanitize_tag(""), "item");
+    }
+
+    #[test]
+    fn build_xml_escapes_text() {
+        let xml = build_xml("item", &Item::from("a&b"), 1);
+        assert_eq!(xml, "  <item>a&amp;b</item>\n");
+    }
+}

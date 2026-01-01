@@ -23,3 +23,14 @@ impl From<wreq::Error> for SilkwormError {
         SilkwormError::Http(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SilkwormError;
+
+    #[test]
+    fn http_error_display_is_formatted() {
+        let err = SilkwormError::Http("boom".to_string());
+        assert_eq!(format!("{err}"), "http error: boom");
+    }
+}

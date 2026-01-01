@@ -150,8 +150,8 @@ impl<S: Spider> Engine<S> {
             });
         }
 
-        if let Some(interval) = self.state.log_stats_interval {
-            if interval > Duration::ZERO {
+        if let Some(interval) = self.state.log_stats_interval
+            && interval > Duration::ZERO {
                 let engine = Self {
                     state: self.state.clone(),
                 };
@@ -159,7 +159,6 @@ impl<S: Spider> Engine<S> {
                     engine.log_statistics(interval).await;
                 });
             }
-        }
 
         if let Err(err) = self.open_spider().await {
             self.state
@@ -431,5 +430,56 @@ impl<S: Spider> EngineState<S> {
 
     fn errors_increment(&self) {
         self.stats.errors.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Engine, EngineConfig, Stats};
+    use crate::errors::SilkwormError;
+    use crate::request::SpiderResult;
+    use crate::response::HtmlResponse;
+    use crate::spider::Spider;
+
+    struct TestSpider;
+
+    impl Spider for TestSpider {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn parse(
+            &self,
+            _response: HtmlResponse<Self>,
+        ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
+            async { Vec::new() }
+        }
+    }
+
+    #[test]
+    fn stats_elapsed_defaults_to_zero() {
+        let stats = Stats::new();
+        assert_eq!(stats.elapsed(), std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn engine_new_rejects_zero_concurrency() {
+        let config = EngineConfig::<TestSpider> {
+            concurrency: 0,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+        };
+        let result = Engine::new(TestSpider, config);
+        match result {
+            Err(SilkwormError::Config(_)) => {}
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
     }
 }

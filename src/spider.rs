@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::logging::{get_logger, Logger};
+use crate::logging::{Logger, get_logger};
 use crate::request::{Request, SpiderResult};
 use crate::response::HtmlResponse;
 
@@ -37,5 +37,45 @@ pub trait Spider: Send + Sync + 'static {
 
     fn log(&self) -> Logger {
         get_logger("spider", Some(self.name()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Spider;
+    use crate::request::SpiderResult;
+    use crate::response::HtmlResponse;
+
+    struct TestSpider;
+
+    impl Spider for TestSpider {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn start_urls(&self) -> Vec<String> {
+            vec![
+                "https://example.com".to_string(),
+                "https://example.com/next".to_string(),
+            ]
+        }
+
+        fn parse(
+            &self,
+            _response: HtmlResponse<Self>,
+        ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
+            async { Vec::new() }
+        }
+    }
+
+    #[tokio::test]
+    async fn start_requests_defaults_to_start_urls() {
+        let spider = TestSpider;
+        let requests = spider.start_requests().await;
+        let urls: Vec<String> = requests.into_iter().map(|req| req.url).collect();
+        assert_eq!(
+            urls,
+            vec!["https://example.com", "https://example.com/next"]
+        );
     }
 }

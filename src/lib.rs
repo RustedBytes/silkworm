@@ -30,3 +30,17 @@ pub use response::{HtmlElement, HtmlResponse, Response};
 pub use runner::{RunConfig, crawl, crawl_with, run_spider, run_spider_with};
 pub use spider::Spider;
 pub use types::{Headers, Item, Meta, Params};
+
+#[cfg(test)]
+mod tests {
+    use super::{Headers, Item, SilkwormError};
+
+    #[test]
+    fn reexports_are_accessible() {
+        let _err = SilkwormError::Http("boom".to_string());
+        let mut headers = Headers::new();
+        headers.insert("accept".to_string(), "text/html".to_string());
+        let _item = Item::from(1);
+        assert_eq!(headers.get("accept").map(String::as_str), Some("text/html"));
+    }
+}

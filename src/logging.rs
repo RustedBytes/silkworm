@@ -130,3 +130,28 @@ fn escape_value(value: &str) -> String {
         value.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Level, escape, escape_value, level_label};
+
+    #[test]
+    fn escape_replaces_quotes() {
+        assert_eq!(escape("a\"b"), "a\\\"b");
+    }
+
+    #[test]
+    fn escape_value_quotes_whitespace() {
+        assert_eq!(escape_value("hello world"), "\"hello world\"");
+        assert_eq!(escape_value("plain"), "plain");
+        assert_eq!(escape_value(""), "\"\"");
+    }
+
+    #[test]
+    fn level_label_matches_levels() {
+        assert_eq!(level_label(Level::Debug), "DEBUG");
+        assert_eq!(level_label(Level::Info), "INFO");
+        assert_eq!(level_label(Level::Warn), "WARN");
+        assert_eq!(level_label(Level::Error), "ERROR");
+    }
+}

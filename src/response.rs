@@ -205,11 +205,10 @@ impl HtmlElement {
     pub fn text(&self) -> String {
         let doc = scraper::Html::parse_fragment(&self.html);
         let selector = scraper::Selector::parse("*").ok();
-        if let Some(selector) = selector {
-            if let Some(element) = doc.select(&selector).next() {
+        if let Some(selector) = selector
+            && let Some(element) = doc.select(&selector).next() {
                 return element.text().collect::<Vec<_>>().join("");
             }
-        }
         self.html.clone()
     }
 
@@ -501,4 +500,91 @@ fn encoding_from_bom(body: &[u8]) -> Option<String> {
         return Some("utf-16be".to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Response;
+    use crate::request::Request;
+    use crate::types::Headers;
+
+    #[test]
+    fn response_url_join_resolves_relative() {
+        let request = Request::<()>::new("https://example.com");
+        let response = Response {
+            url: "https://example.com/path/".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+        assert_eq!(response.url_join("next"), "https://example.com/path/next");
+    }
+
+    #[test]
+    fn follow_all_filters_none_and_joins_urls() {
+        let request = Request::<()>::new("https://example.com/base/");
+        let response = Response {
+            url: "https://example.com/base/".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        };
+        let hrefs = vec![Some("/one"), None, Some("two")];
+        let requests = response.follow_all(hrefs, None);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, "https://example.com/one");
+        assert_eq!(requests[1].url, "https://example.com/base/two");
+    }
+
+    #[test]
+    fn looks_like_html_detects_content_type() {
+        let mut headers = Headers::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers,
+            body: Vec::new(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        assert!(response.looks_like_html());
+    }
+
+    #[test]
+    fn html_response_selects_and_reads_attributes() {
+        let body = b"<html><body><a href=\"/x\">Link</a></body></html>";
+        let mut headers = Headers::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers,
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+        let anchor = html.select_first("a").expect("select").expect("anchor");
+        assert_eq!(anchor.text(), "Link");
+        assert_eq!(anchor.attr("href").as_deref(), Some("/x"));
+        let xpath = html.xpath_first("//a").expect("xpath").expect("node");
+        assert!(xpath.html().contains("<a"));
+    }
+
+    #[test]
+    fn close_clears_body_and_headers() {
+        let mut headers = Headers::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        let mut response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers,
+            body: b"hi".to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        response.close();
+        assert!(response.body.is_empty());
+        assert!(response.headers.is_empty());
+    }
 }

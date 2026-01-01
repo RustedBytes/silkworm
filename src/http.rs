@@ -235,11 +235,10 @@ impl HttpClient {
 }
 
 fn resolve_redirect_url(current_url: &str, location: &str) -> String {
-    if let Ok(base) = Url::parse(current_url) {
-        if let Ok(joined) = base.join(location) {
+    if let Ok(base) = Url::parse(current_url)
+        && let Ok(joined) = base.join(location) {
             return joined.to_string();
         }
-    }
     location.to_string()
 }
 
@@ -274,4 +273,80 @@ fn normalize_headers(headers: &wreq::header::HeaderMap) -> Headers {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HttpClient, normalize_headers, redirect_request, resolve_redirect_url};
+    use crate::request::Request;
+    use crate::types::{Headers, Item};
+    use std::collections::HashMap;
+
+    #[test]
+    fn build_url_merges_params() {
+        let client =
+            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
+        let req = Request::<()>::new("https://example.com/path?foo=bar")
+            .with_param("foo", "baz")
+            .with_param("q", "1");
+        let built = client.build_url(&req).expect("build url");
+        let parsed = url::Url::parse(&built).expect("parse url");
+        let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(query.get("foo"), Some(&"baz".to_string()));
+        assert_eq!(query.get("q"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn merge_headers_adds_keep_alive() {
+        let client =
+            HttpClient::new(1, Headers::new(), None, 1024, false, 3, true).expect("client");
+        let request_headers = Headers::new();
+        let merged = client.merge_headers(&request_headers);
+        assert_eq!(
+            merged.get("Connection").map(String::as_str),
+            Some("keep-alive")
+        );
+    }
+
+    #[test]
+    fn resolve_redirect_url_joins_relative() {
+        let resolved = resolve_redirect_url("https://example.com/path/page", "/next");
+        assert_eq!(resolved, "https://example.com/next");
+    }
+
+    #[test]
+    fn redirect_request_resets_method_and_payload() {
+        let req = Request::<()>::new("https://example.com/original")
+            .with_method("POST")
+            .with_data(vec![1, 2, 3])
+            .with_json(Item::from(1))
+            .with_param("q", "1");
+        let redirected = redirect_request(req, "https://example.com/new", 301);
+        assert_eq!(redirected.method, "GET");
+        assert!(redirected.data.is_none());
+        assert!(redirected.json.is_none());
+        assert_eq!(redirected.url, "https://example.com/new");
+        assert!(redirected.params.is_empty());
+        assert_eq!(
+            redirected
+                .meta
+                .get("redirect_times")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn normalize_headers_copies_valid_entries() {
+        let mut headers = wreq::header::HeaderMap::new();
+        headers.insert(
+            "content-type",
+            wreq::header::HeaderValue::from_static("text/html"),
+        );
+        let normalized = normalize_headers(&headers);
+        assert_eq!(
+            normalized.get("content-type").map(String::as_str),
+            Some("text/html")
+        );
+    }
 }

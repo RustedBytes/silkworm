@@ -357,3 +357,141 @@ fn looks_like_html<S: Spider>(
 fn noop_callback<S: Spider>() -> Callback<S> {
     Arc::new(|_spider, _response| Box::pin(async move { Vec::new() }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
+        RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
+    };
+    use crate::request::{Request, SpiderResult};
+    use crate::response::{HtmlResponse, Response};
+    use crate::spider::Spider;
+    use crate::types::Headers;
+    use std::sync::Arc;
+
+    struct TestSpider;
+
+    impl Spider for TestSpider {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn parse(
+            &self,
+            _response: HtmlResponse<Self>,
+        ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
+            async { Vec::new() }
+        }
+    }
+
+    fn base_response(request: Request<TestSpider>, status: u16) -> Response<TestSpider> {
+        Response {
+            url: request.url.clone(),
+            status,
+            headers: Headers::new(),
+            body: Vec::new(),
+            request,
+        }
+    }
+
+    #[tokio::test]
+    async fn user_agent_middleware_sets_header_when_missing() {
+        let middleware = UserAgentMiddleware::new(Vec::new(), None);
+        let request = Request::<TestSpider>::new("https://example.com");
+        let spider = Arc::new(TestSpider);
+
+        let request = middleware.process_request(request, spider).await;
+
+        assert_eq!(
+            request.headers.get("User-Agent").map(String::as_str),
+            Some("silkworm/0.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_middleware_cycles_when_not_random() {
+        let middleware = ProxyMiddleware::new(
+            vec!["http://proxy-a".to_string(), "http://proxy-b".to_string()],
+            false,
+        );
+        let spider = Arc::new(TestSpider);
+
+        let req1 = middleware
+            .process_request(Request::new("https://example.com"), spider.clone())
+            .await;
+        let req2 = middleware
+            .process_request(Request::new("https://example.com"), spider)
+            .await;
+
+        assert_eq!(
+            req1.meta
+                .get("proxy")
+                .and_then(|v: &serde_json::Value| v.as_str()),
+            Some("http://proxy-a")
+        );
+        assert_eq!(
+            req2.meta
+                .get("proxy")
+                .and_then(|v: &serde_json::Value| v.as_str()),
+            Some("http://proxy-b")
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_middleware_returns_request_on_retryable_status() {
+        let middleware = RetryMiddleware::new(1, Some(vec![500]), Some(vec![500]), 0.0);
+        let spider = Arc::new(TestSpider);
+        let request = Request::<TestSpider>::new("https://example.com");
+        let response = base_response(request, 500);
+
+        let action = middleware.process_response(response, spider).await;
+
+        match action {
+            ResponseAction::Request(req) => {
+                assert!(req.dont_filter);
+                assert_eq!(
+                    req.meta.get("retry_times").and_then(|v| v.as_u64()),
+                    Some(1)
+                );
+            }
+            ResponseAction::Response(_) => panic!("expected retry request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn skip_non_html_sets_noop_callback() {
+        let middleware = SkipNonHtmlMiddleware::new(None, 0);
+        let spider = Arc::new(TestSpider);
+        let mut request = Request::<TestSpider>::new("https://example.com");
+        request
+            .headers
+            .insert("Accept".to_string(), "application/json".to_string());
+        let mut response = base_response(request, 200);
+        response
+            .headers
+            .insert("content-type".to_string(), "application/json".to_string());
+
+        let action = middleware.process_response(response, spider).await;
+
+        match action {
+            ResponseAction::Response(response) => {
+                assert!(response.request.callback.is_some());
+            }
+            ResponseAction::Request(_) => panic!("expected response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delay_middleware_custom_keeps_request_intact() {
+        let middleware = DelayMiddleware::custom(|_, _| 0.0);
+        let spider = Arc::new(TestSpider);
+        let request = Request::<TestSpider>::new("https://example.com");
+
+        let delayed = middleware.process_request(request.clone(), spider).await;
+
+        assert_eq!(delayed.url, request.url);
+        assert_eq!(delayed.method, request.method);
+        assert_eq!(delayed.headers.len(), request.headers.len());
+    }
+}
