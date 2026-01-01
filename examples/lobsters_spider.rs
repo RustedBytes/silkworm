@@ -52,14 +52,8 @@ impl Spider for LobstersSpider {
                 short_id = value.to_string();
             }
 
-            let title_el = story
-                .select_first("span.link a.u-url")
-                .ok()
-                .flatten();
-            let title = title_el
-                .as_ref()
-                .map(|el| el.text())
-                .unwrap_or_default();
+            let title_el = story.select_first("span.link a.u-url").ok().flatten();
+            let title = title_el.as_ref().map(|el| el.text()).unwrap_or_default();
             let href = title_el.and_then(|el| el.attr("href"));
             let url = href
                 .as_deref()
@@ -136,7 +130,10 @@ impl Spider for LobstersSpider {
         }
 
         if page < self.max_pages {
-            let next_links = response.select("div.morelink a[href]").ok().unwrap_or_default();
+            let next_links = response
+                .select("div.morelink a[href]")
+                .ok()
+                .unwrap_or_default();
             if let Some(link) = next_links.last() {
                 if let Some(href) = link.attr("href") {
                     out.push(response.follow(&href, None).into());
@@ -181,8 +178,12 @@ fn main() -> silkworm::SilkwormResult<()> {
         Arc::new(UserAgentMiddleware::new(vec![], None)),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
-    config.response_middlewares =
-        vec![Arc::new(RetryMiddleware::new(15, None, Some(vec![403, 429]), 0.5))];
+    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(
+        15,
+        None,
+        Some(vec![403, 429]),
+        0.5,
+    ))];
     config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/lobsters.jl"))];
     config.request_timeout = Some(Duration::from_secs(10));
     config.log_stats_interval = Some(Duration::from_secs(10));

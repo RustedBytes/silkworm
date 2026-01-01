@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use reqwest::redirect::Policy;
+use wreq::redirect::Policy;
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -13,7 +13,7 @@ use crate::types::Headers;
 
 #[derive(Clone)]
 pub struct HttpClient {
-    client: reqwest::Client,
+    client: wreq::Client,
     semaphore: std::sync::Arc<Semaphore>,
     pub concurrency: usize,
     default_headers: Headers,
@@ -40,7 +40,7 @@ impl HttpClient {
                 "concurrency must be greater than zero".to_string(),
             ));
         }
-        let client = reqwest::Client::builder()
+        let client = wreq::Client::builder()
             .redirect(Policy::none())
             .build()?;
 
@@ -58,10 +58,15 @@ impl HttpClient {
         })
     }
 
-    pub async fn fetch<S: Send + Sync + 'static>(&self, req: Request<S>) -> SilkwormResult<Response<S>> {
-        let _permit = self.semaphore.acquire().await.map_err(|_| {
-            SilkwormError::Http("HTTP client semaphore closed".to_string())
-        })?;
+    pub async fn fetch<S: Send + Sync + 'static>(
+        &self,
+        req: Request<S>,
+    ) -> SilkwormResult<Response<S>> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| SilkwormError::Http("HTTP client semaphore closed".to_string()))?;
 
         let mut current_req = req;
         let mut redirects_followed = 0usize;
@@ -84,7 +89,7 @@ impl HttpClient {
             };
 
             let method_name = current_req.method.to_uppercase();
-            let method = reqwest::Method::from_bytes(method_name.as_bytes())
+            let method = wreq::Method::from_bytes(method_name.as_bytes())
                 .map_err(|_| SilkwormError::Http("Invalid HTTP method".to_string()))?;
 
             let mut builder = client.request(method, &url);
@@ -122,10 +127,7 @@ impl HttpClient {
                     )));
                 }
 
-                let location = headers
-                    .get("location")
-                    .cloned()
-                    .unwrap_or_default();
+                let location = headers.get("location").cloned().unwrap_or_default();
                 let redirect_url = resolve_redirect_url(&url, &location);
                 if visited.contains(&redirect_url) {
                     return Err(SilkwormError::Http("Redirect loop detected".to_string()));
@@ -216,10 +218,10 @@ impl HttpClient {
         Ok(parsed.to_string())
     }
 
-    fn build_client_with_proxy(&self, proxy_url: &str) -> SilkwormResult<reqwest::Client> {
-        let proxy = reqwest::Proxy::all(proxy_url)
+    fn build_client_with_proxy(&self, proxy_url: &str) -> SilkwormResult<wreq::Client> {
+        let proxy = wreq::Proxy::all(proxy_url)
             .map_err(|err| SilkwormError::Http(format!("Invalid proxy {}: {}", proxy_url, err)))?;
-        let client = reqwest::Client::builder()
+        let client = wreq::Client::builder()
             .redirect(Policy::none())
             .proxy(proxy)
             .build()?;
@@ -266,7 +268,7 @@ fn redirect_request<S>(mut req: Request<S>, redirect_url: &str, status: u16) -> 
     req
 }
 
-fn normalize_headers(headers: &reqwest::header::HeaderMap) -> Headers {
+fn normalize_headers(headers: &wreq::header::HeaderMap) -> Headers {
     let mut out = Headers::new();
     for (name, value) in headers.iter() {
         if let Ok(value) = value.to_str() {

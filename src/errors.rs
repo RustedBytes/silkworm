@@ -18,8 +18,8 @@ pub enum SilkwormError {
 
 pub type SilkwormResult<T> = Result<T, SilkwormError>;
 
-impl From<reqwest::Error> for SilkwormError {
-    fn from(err: reqwest::Error) -> Self {
+impl From<wreq::Error> for SilkwormError {
+    fn from(err: wreq::Error) -> Self {
         SilkwormError::Http(err.to_string())
     }
 }

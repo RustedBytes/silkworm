@@ -1,8 +1,8 @@
 use crate::errors::{SilkwormError, SilkwormResult};
 
 pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = wreq::Client::builder()
+        .redirect(wreq::redirect::Policy::none())
         .build()
         .map_err(|err| SilkwormError::Http(err.to_string()))?;
     let response = client

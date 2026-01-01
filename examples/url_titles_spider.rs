@@ -27,7 +27,10 @@ impl UrlTitlesSpider {
             Err(err) => {
                 logger.error(
                     "Failed to open URLs file",
-                    &[("error", err.to_string()), ("path", self.urls_path.display().to_string())],
+                    &[
+                        ("error", err.to_string()),
+                        ("path", self.urls_path.display().to_string()),
+                    ],
                 );
                 return Vec::new();
             }
@@ -41,7 +44,10 @@ impl UrlTitlesSpider {
                 Err(err) => {
                     logger.warn(
                         "Skipping unreadable line",
-                        &[("line", (line_no + 1).to_string()), ("error", err.to_string())],
+                        &[
+                            ("line", (line_no + 1).to_string()),
+                            ("error", err.to_string()),
+                        ],
                     );
                     continue;
                 }
@@ -56,7 +62,10 @@ impl UrlTitlesSpider {
                 Err(err) => {
                     logger.warn(
                         "Skipping invalid JSON line",
-                        &[("line", (line_no + 1).to_string()), ("error", err.to_string())],
+                        &[
+                            ("line", (line_no + 1).to_string()),
+                            ("error", err.to_string()),
+                        ],
                     );
                     continue;
                 }
@@ -121,8 +130,7 @@ impl Spider for UrlTitlesSpider {
                 continue;
             }
             let mut req = Request::new(url);
-            req.meta
-                .insert("record".to_string(), Value::Object(record));
+            req.meta.insert("record".to_string(), Value::Object(record));
             req.dont_filter = true;
             out.push(req);
         }

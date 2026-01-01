@@ -1,7 +1,7 @@
 use std::env;
 use std::io::{self, Write};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

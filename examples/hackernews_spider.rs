@@ -55,10 +55,7 @@ impl Spider for HackerNewsSpider {
                 .select_first("span.titleline a, a.storylink")
                 .ok()
                 .flatten();
-            let title = title_el
-                .as_ref()
-                .map(|el| el.text())
-                .unwrap_or_default();
+            let title = title_el.as_ref().map(|el| el.text()).unwrap_or_default();
             let href = title_el.and_then(|el| el.attr("href"));
             let url = href
                 .as_deref()
@@ -183,7 +180,12 @@ fn main() -> silkworm::SilkwormResult<()> {
         Arc::new(UserAgentMiddleware::new(vec![], None)),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
-    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(3, None, Some(vec![403]), 0.5))];
+    config.response_middlewares = vec![Arc::new(RetryMiddleware::new(
+        3,
+        None,
+        Some(vec![403]),
+        0.5,
+    ))];
     config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new("data/hackernews.jl"))];
     config.request_timeout = Some(Duration::from_secs(10));
     config.log_stats_interval = Some(Duration::from_secs(10));

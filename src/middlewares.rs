@@ -135,10 +135,11 @@ impl RetryMiddleware {
         sleep_http_codes: Option<Vec<u16>>,
         backoff_base: f64,
     ) -> Self {
-        let retry_http_codes = retry_http_codes.unwrap_or_else(|| {
-            vec![500, 502, 503, 504, 522, 524, 408, 429]
-        });
-        let sleep_http_codes = sleep_http_codes.clone().unwrap_or_else(|| retry_http_codes.clone());
+        let retry_http_codes =
+            retry_http_codes.unwrap_or_else(|| vec![500, 502, 503, 504, 522, 524, 408, 429]);
+        let sleep_http_codes = sleep_http_codes
+            .clone()
+            .unwrap_or_else(|| retry_http_codes.clone());
         let mut merged = retry_http_codes.clone();
         for code in &sleep_http_codes {
             if !merged.contains(code) {
@@ -254,7 +255,10 @@ impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
         if delay > 0.0 {
             self.logger.debug(
                 "Delaying request",
-                &[("url", request.url.clone()), ("delay", format!("{:.3}", delay))],
+                &[
+                    ("url", request.url.clone()),
+                    ("delay", format!("{:.3}", delay)),
+                ],
             );
             sleep(Duration::from_secs_f64(delay)).await;
         }
@@ -281,7 +285,11 @@ impl SkipNonHtmlMiddleware {
 
 #[async_trait]
 impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
-    async fn process_response(&self, mut response: Response<S>, _spider: Arc<S>) -> ResponseAction<S> {
+    async fn process_response(
+        &self,
+        mut response: Response<S>,
+        _spider: Arc<S>,
+    ) -> ResponseAction<S> {
         if response
             .request
             .meta
@@ -317,14 +325,21 @@ impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
     }
 }
 
-fn looks_like_html<S: Spider>(response: &Response<S>, allowed_types: &[String], sniff_bytes: usize) -> bool {
+fn looks_like_html<S: Spider>(
+    response: &Response<S>,
+    allowed_types: &[String],
+    sniff_bytes: usize,
+) -> bool {
     let content_type = response
         .headers
         .get("content-type")
         .map(|value| value.to_lowercase())
         .unwrap_or_default();
 
-    if allowed_types.iter().any(|token| content_type.contains(token)) {
+    if allowed_types
+        .iter()
+        .any(|token| content_type.contains(token))
+    {
         return true;
     }
 

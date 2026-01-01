@@ -29,7 +29,10 @@ impl Spider for LoggingSpider {
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
         self.logger.info(
             "Parsing page",
-            &[("url", response.url.clone()), ("status", response.status.to_string())],
+            &[
+                ("url", response.url.clone()),
+                ("status", response.status.to_string()),
+            ],
         );
         vec![json!({"url": response.url, "status": response.status}).into()]
     }

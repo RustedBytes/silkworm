@@ -76,6 +76,8 @@ impl Spider for HybridLoggerSpider {
 }
 
 fn main() -> silkworm::SilkwormResult<()> {
-    println!("Redirect stdout to capture logs: cargo run --example hybrid_logger_demo > data/logs.txt");
+    println!(
+        "Redirect stdout to capture logs: cargo run --example hybrid_logger_demo > data/logs.txt"
+    );
     run_spider(HybridLoggerSpider::new())
 }

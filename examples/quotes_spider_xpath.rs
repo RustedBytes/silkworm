@@ -25,7 +25,8 @@ impl Spider for QuotesSpider {
                 }
             }
             Err(err) => {
-                self.log().warn("XPath not supported", &[("error", err.to_string())]);
+                self.log()
+                    .warn("XPath not supported", &[("error", err.to_string())]);
             }
         }
 

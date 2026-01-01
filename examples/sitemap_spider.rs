@@ -88,12 +88,10 @@ impl Spider for SitemapSpider {
     }
 
     async fn start_requests(&self) -> Vec<Request<Self>> {
-        vec![
-            Request::new(self.sitemap_url.clone())
-                .with_callback(callback_from_fn(parse_sitemap))
-                .with_meta("allow_non_html", Value::Bool(true))
-                .with_dont_filter(true),
-        ]
+        vec![Request::new(self.sitemap_url.clone())
+            .with_callback(callback_from_fn(parse_sitemap))
+            .with_meta("allow_non_html", Value::Bool(true))
+            .with_dont_filter(true)]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -101,12 +99,18 @@ impl Spider for SitemapSpider {
     }
 }
 
-async fn parse_sitemap(spider: &SitemapSpider, response: Response<SitemapSpider>) -> SpiderResult<SitemapSpider> {
+async fn parse_sitemap(
+    spider: &SitemapSpider,
+    response: Response<SitemapSpider>,
+) -> SpiderResult<SitemapSpider> {
     let logger = spider.log();
     if response.status >= 400 {
         logger.warn(
             "Failed to fetch sitemap",
-            &[("url", response.url.clone()), ("status", response.status.to_string())],
+            &[
+                ("url", response.url.clone()),
+                ("status", response.status.to_string()),
+            ],
         );
         return Vec::new();
     }
@@ -213,10 +217,17 @@ fn main() -> silkworm::SilkwormResult<()> {
     config.concurrency = concurrency;
     config.request_middlewares = vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
     if delay > 0.0 {
-        config.request_middlewares.push(Arc::new(DelayMiddleware::fixed(delay)));
+        config
+            .request_middlewares
+            .push(Arc::new(DelayMiddleware::fixed(delay)));
     }
     config.response_middlewares = vec![
-        Arc::new(RetryMiddleware::new(3, None, Some(vec![403, 429, 503]), 0.5)),
+        Arc::new(RetryMiddleware::new(
+            3,
+            None,
+            Some(vec![403, 429, 503]),
+            0.5,
+        )),
         Arc::new(SkipNonHtmlMiddleware::new(None, 1024)),
     ];
     config.item_pipelines = vec![Arc::new(JsonLinesPipeline::new(output))];

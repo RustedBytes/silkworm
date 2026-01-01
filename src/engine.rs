@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
@@ -61,6 +61,7 @@ struct EngineState<S: Spider> {
     stop: AtomicBool,
     pending: AtomicUsize,
     pending_notify: Notify,
+    stop_notify: Notify,
     request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
     response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
     item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
@@ -106,6 +107,7 @@ impl<S: Spider> Engine<S> {
             stop: AtomicBool::new(false),
             pending: AtomicUsize::new(0),
             pending_notify: Notify::new(),
+            stop_notify: Notify::new(),
             request_middlewares,
             response_middlewares,
             item_pipelines,
@@ -114,13 +116,16 @@ impl<S: Spider> Engine<S> {
             logger,
             html_max_size_bytes,
         };
-        Ok(Engine { state: Arc::new(state) })
+        Ok(Engine {
+            state: Arc::new(state),
+        })
     }
 
     pub async fn run(&self) -> SilkwormResult<()> {
-        self.state
-            .logger
-            .info("Starting engine", &[("spider", self.state.spider.name().to_string())]);
+        self.state.logger.info(
+            "Starting engine",
+            &[("spider", self.state.spider.name().to_string())],
+        );
         self.state.stats.set_start_time(Instant::now());
 
         let mut join_set = JoinSet::new();
@@ -145,7 +150,9 @@ impl<S: Spider> Engine<S> {
         }
 
         if let Err(err) = self.open_spider().await {
-            self.state.logger.error("Failed to open spider", &[("error", err.to_string())]);
+            self.state
+                .logger
+                .error("Failed to open spider", &[("error", err.to_string())]);
             self.shutdown().await;
             return Err(err);
         }
@@ -155,10 +162,9 @@ impl<S: Spider> Engine<S> {
 
         while let Some(res) = join_set.join_next().await {
             if let Err(err) = res {
-                self.state.logger.error(
-                    "Worker task failed",
-                    &[("error", format!("{err}"))],
-                );
+                self.state
+                    .logger
+                    .error("Worker task failed", &[("error", format!("{err}"))]);
             }
         }
 
@@ -198,10 +204,9 @@ impl<S: Spider> Engine<S> {
         if !req.dont_filter {
             let mut seen = self.state.seen.lock().await;
             if seen.contains(&req.url) {
-                self.state.logger.debug(
-                    "Skipping already seen request",
-                    &[("url", req.url.clone())],
-                );
+                self.state
+                    .logger
+                    .debug("Skipping already seen request", &[("url", req.url.clone())]);
                 return Ok(());
             }
             seen.insert(req.url.clone());
@@ -224,9 +229,16 @@ impl<S: Spider> Engine<S> {
 
     async fn worker(self) {
         loop {
-            let req_opt = {
-                let mut rx = self.state.queue_rx.lock().await;
-                rx.recv().await
+            if self.state.stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let req_opt = tokio::select! {
+                req = async {
+                    let mut rx = self.state.queue_rx.lock().await;
+                    rx.recv().await
+                } => req,
+                _ = self.state.stop_notify.notified() => None,
             };
             let Some(req) = req_opt else { break };
 
@@ -258,9 +270,7 @@ impl<S: Spider> Engine<S> {
     async fn apply_request_middlewares(&self, req: Request<S>) -> Request<S> {
         let mut current = req;
         for mw in &self.state.request_middlewares {
-            current = mw
-                .process_request(current, self.state.spider.clone())
-                .await;
+            current = mw.process_request(current, self.state.spider.clone()).await;
         }
         current
     }
@@ -285,14 +295,15 @@ impl<S: Spider> Engine<S> {
         }
     }
 
-    async fn apply_response_middlewares(&self, response: Response<S>) -> SilkwormResult<ResponseAction<S>> {
+    async fn apply_response_middlewares(
+        &self,
+        response: Response<S>,
+    ) -> SilkwormResult<ResponseAction<S>> {
         let mut current = ResponseAction::Response(response);
         for mw in &self.state.response_middlewares {
             match current {
                 ResponseAction::Response(resp) => {
-                    current = mw
-                        .process_response(resp, self.state.spider.clone())
-                        .await;
+                    current = mw.process_response(resp, self.state.spider.clone()).await;
                 }
                 ResponseAction::Request(_) => break,
             }
@@ -340,16 +351,16 @@ impl<S: Spider> Engine<S> {
 
     async fn shutdown(&self) {
         self.state.stop.store(true, Ordering::SeqCst);
-        let mut rx = self.state.queue_rx.lock().await;
-        rx.close();
+        self.state.stop_notify.notify_waiters();
     }
 
     fn finish_request(&self) {
-        let _ = self.state.pending.fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |value| Some(value.saturating_sub(1)),
-        );
+        let _ = self
+            .state
+            .pending
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                Some(value.saturating_sub(1))
+            });
         self.state.pending_notify.notify_waiters();
     }
 
@@ -360,7 +371,9 @@ impl<S: Spider> Engine<S> {
             if self.state.stop.load(Ordering::SeqCst) {
                 break;
             }
-            self.state.logger.info("Crawl statistics", &self.stats_payload());
+            self.state
+                .logger
+                .info("Crawl statistics", &self.stats_payload());
         }
     }
 

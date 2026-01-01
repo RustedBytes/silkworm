@@ -42,7 +42,10 @@ impl<S> Response<S> {
 
     pub fn url_join(&self, href: &str) -> String {
         match Url::parse(&self.url) {
-            Ok(base) => base.join(href).map(|u| u.to_string()).unwrap_or_else(|_| href.to_string()),
+            Ok(base) => base
+                .join(href)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| href.to_string()),
             Err(_) => href.to_string(),
         }
     }
@@ -108,9 +111,8 @@ pub struct HtmlResponse<S> {
 
 impl<S> HtmlResponse<S> {
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        let selector = scraper::Selector::parse(selector).map_err(|err| {
-            SilkwormError::Selector(format!("Invalid CSS selector: {err}"))
-        })?;
+        let selector = scraper::Selector::parse(selector)
+            .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
         let source = self.html_source();
         let doc = scraper::Html::parse_document(&source);
         let mut out = Vec::new();
@@ -123,9 +125,8 @@ impl<S> HtmlResponse<S> {
     }
 
     pub fn select_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        let selector = scraper::Selector::parse(selector).map_err(|err| {
-            SilkwormError::Selector(format!("Invalid CSS selector: {err}"))
-        })?;
+        let selector = scraper::Selector::parse(selector)
+            .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
         let source = self.html_source();
         let doc = scraper::Html::parse_document(&source);
         if let Some(element) = doc.select(&selector).next() {
@@ -146,11 +147,15 @@ impl<S> HtmlResponse<S> {
     }
 
     pub fn xpath(&self, _selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        Err(SilkwormError::Selector("XPath selectors are not supported".to_string()))
+        Err(SilkwormError::Selector(
+            "XPath selectors are not supported".to_string(),
+        ))
     }
 
     pub fn xpath_first(&self, _selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        Err(SilkwormError::Selector("XPath selectors are not supported".to_string()))
+        Err(SilkwormError::Selector(
+            "XPath selectors are not supported".to_string(),
+        ))
     }
 
     fn html_source(&self) -> String {
@@ -159,7 +164,11 @@ impl<S> HtmlResponse<S> {
             return String::new();
         }
         let len = self.inner.body.len();
-        let slice = if len > limit { &self.inner.body[..limit] } else { &self.inner.body };
+        let slice = if len > limit {
+            &self.inner.body[..limit]
+        } else {
+            &self.inner.body
+        };
         decode_body(slice, &self.inner.headers).0
     }
 }
@@ -215,9 +224,8 @@ impl HtmlElement {
     }
 
     fn select_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        let selector = scraper::Selector::parse(selector).map_err(|err| {
-            SilkwormError::Selector(format!("Invalid CSS selector: {err}"))
-        })?;
+        let selector = scraper::Selector::parse(selector)
+            .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
         let doc = scraper::Html::parse_fragment(source);
         let mut out = Vec::new();
         for element in doc.select(&selector) {
@@ -228,10 +236,12 @@ impl HtmlElement {
         Ok(out)
     }
 
-    fn select_first_from_source(source: &str, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        let selector = scraper::Selector::parse(selector).map_err(|err| {
-            SilkwormError::Selector(format!("Invalid CSS selector: {err}"))
-        })?;
+    fn select_first_from_source(
+        source: &str,
+        selector: &str,
+    ) -> SilkwormResult<Option<HtmlElement>> {
+        let selector = scraper::Selector::parse(selector)
+            .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
         let doc = scraper::Html::parse_fragment(source);
         if let Some(element) = doc.select(&selector).next() {
             Ok(Some(HtmlElement {
@@ -294,8 +304,7 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
     let head_len = min(4096, body.len());
     let head = String::from_utf8_lossy(&body[..head_len]);
 
-    let meta_charset =
-        Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#).ok()?;
+    let meta_charset = Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#).ok()?;
     if let Some(caps) = meta_charset.captures(&head) {
         return caps.get(1).map(|m| m.as_str().to_string());
     }

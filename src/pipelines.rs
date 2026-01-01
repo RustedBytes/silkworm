@@ -104,16 +104,20 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
             .await?;
         let mut guard = self.file.lock().await;
         *guard = Some(file);
-        self.logger
-            .info("Opened JSON Lines pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Opened JSON Lines pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
     async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
         let mut guard = self.file.lock().await;
         *guard = None;
-        self.logger
-            .info("Closed JSON Lines pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Closed JSON Lines pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
@@ -121,9 +125,9 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
         let line = serde_json::to_string(&item)
             .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
         let mut guard = self.file.lock().await;
-        let file = guard.as_mut().ok_or_else(|| {
-            SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string())
-        })?;
+        let file = guard
+            .as_mut()
+            .ok_or_else(|| SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string()))?;
         file.write_all(line.as_bytes()).await?;
         file.write_all(b"\n").await?;
         file.flush().await?;
@@ -165,16 +169,20 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
             .await?;
         let mut guard = self.file.lock().await;
         *guard = Some(file);
-        self.logger
-            .info("Opened CSV pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Opened CSV pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
     async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
         let mut guard = self.file.lock().await;
         *guard = None;
-        self.logger
-            .info("Closed CSV pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Closed CSV pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
@@ -191,9 +199,9 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
         drop(fieldnames_guard);
 
         let mut guard = self.file.lock().await;
-        let file = guard.as_mut().ok_or_else(|| {
-            SilkwormError::Pipeline("CsvPipeline not opened".to_string())
-        })?;
+        let file = guard
+            .as_mut()
+            .ok_or_else(|| SilkwormError::Pipeline("CsvPipeline not opened".to_string()))?;
         let mut header_guard = self.header_written.lock().await;
         if !*header_guard {
             let header = fieldnames
@@ -208,12 +216,7 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
 
         let row = fieldnames
             .iter()
-            .map(|name| {
-                flattened
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_default()
-            })
+            .map(|name| flattened.get(name).cloned().unwrap_or_default())
             .map(|value| csv_escape(&value))
             .collect::<Vec<_>>()
             .join(",");
@@ -264,8 +267,10 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
         );
         file.write_all(header.as_bytes()).await?;
         *guard = Some(file);
-        self.logger
-            .info("Opened XML pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Opened XML pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
@@ -277,16 +282,18 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
             file.flush().await?;
         }
         *guard = None;
-        self.logger
-            .info("Closed XML pipeline", &[("path", self.path.display().to_string())]);
+        self.logger.info(
+            "Closed XML pipeline",
+            &[("path", self.path.display().to_string())],
+        );
         Ok(())
     }
 
     async fn process_item(&self, item: Item, _spider: Arc<S>) -> SilkwormResult<Item> {
         let mut guard = self.file.lock().await;
-        let file = guard.as_mut().ok_or_else(|| {
-            SilkwormError::Pipeline("XmlPipeline not opened".to_string())
-        })?;
+        let file = guard
+            .as_mut()
+            .ok_or_else(|| SilkwormError::Pipeline("XmlPipeline not opened".to_string()))?;
         let xml = build_xml(&self.item_element, &item, 1);
         file.write_all(xml.as_bytes()).await?;
         file.flush().await?;
@@ -337,14 +344,13 @@ fn scalar_to_string(value: &Item) -> String {
         Item::Bool(v) => v.to_string(),
         Item::Number(v) => v.to_string(),
         Item::String(v) => v.clone(),
-        Item::Array(_) | Item::Object(_) => {
-            serde_json::to_string(value).unwrap_or_default()
-        }
+        Item::Array(_) | Item::Object(_) => serde_json::to_string(value).unwrap_or_default(),
     }
 }
 
 fn csv_escape(value: &str) -> String {
-    let needs_quotes = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
+    let needs_quotes =
+        value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
     if needs_quotes {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

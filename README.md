@@ -1,6 +1,6 @@
 # Silkworm (Rust)
 
-Async-first web scraping framework inspired by Silkworm, built on `reqwest` + `scraper`.
+Async-first web scraping framework inspired by Silkworm, built on `wreq` + `scraper`.
 It provides a minimal Spider/Request/Response model, middlewares, pipelines, and
 structured logging so you can write crawlers without boilerplate.
 
