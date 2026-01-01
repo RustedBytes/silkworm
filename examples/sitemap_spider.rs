@@ -1,14 +1,15 @@
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{Number, Value};
+use std::future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use silkworm::{
-    callback_from_fn, run_spider_with, DelayMiddleware, HtmlResponse, JsonLinesPipeline, Request,
-    Response, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, Spider, SpiderResult,
-    UserAgentMiddleware,
+    callback_from_fn, run_spider_with, CallbackFuture, DelayMiddleware, HtmlResponse,
+    JsonLinesPipeline, Request, Response, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, Spider,
+    SpiderResult, UserAgentMiddleware,
 };
 
 struct SitemapSpider {
@@ -99,8 +100,15 @@ impl Spider for SitemapSpider {
     }
 }
 
-async fn parse_sitemap(
-    spider: &SitemapSpider,
+fn parse_sitemap(
+    spider: Arc<SitemapSpider>,
+    response: Response<SitemapSpider>,
+) -> CallbackFuture<SitemapSpider> {
+    Box::pin(future::ready(parse_sitemap_inner(spider, response)))
+}
+
+fn parse_sitemap_inner(
+    spider: Arc<SitemapSpider>,
     response: Response<SitemapSpider>,
 ) -> SpiderResult<SitemapSpider> {
     let logger = spider.log();

@@ -159,13 +159,13 @@ impl<S> From<Item> for SpiderOutput<S> {
     }
 }
 
-pub fn callback_from_fn<S, Fut>(func: fn(&S, Response<S>) -> Fut) -> Callback<S>
+pub fn callback_from_fn<S, Fut>(func: fn(Arc<S>, Response<S>) -> Fut) -> Callback<S>
 where
     S: Send + Sync + 'static,
     Fut: Future<Output = SpiderResult<S>> + Send + 'static,
 {
     Arc::new(move |spider: Arc<S>, response: Response<S>| {
-        let fut = func(spider.as_ref(), response);
+        let fut = func(spider, response);
         Box::pin(fut)
     })
 }
