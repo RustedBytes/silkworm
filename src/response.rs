@@ -4,6 +4,9 @@ use std::ops::{Deref, DerefMut};
 
 use encoding_rs::Encoding;
 use regex::Regex;
+use sxd_document::dom::{Attribute, Element};
+use sxd_xpath::nodeset::Node;
+use sxd_xpath::{Context, Factory, Value};
 use url::Url;
 
 use crate::errors::{SilkwormError, SilkwormResult};
@@ -146,16 +149,14 @@ impl<S> HtmlResponse<S> {
         self.select_first(selector)
     }
 
-    pub fn xpath(&self, _selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        Err(SilkwormError::Selector(
-            "XPath selectors are not supported".to_string(),
-        ))
+    pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
+        xpath_from_source(&self.html_source(), selector)
     }
 
-    pub fn xpath_first(&self, _selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        Err(SilkwormError::Selector(
-            "XPath selectors are not supported".to_string(),
-        ))
+    pub fn xpath_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
+        Ok(xpath_from_source(&self.html_source(), selector)?
+            .into_iter()
+            .next())
     }
 
     fn html_source(&self) -> String {
@@ -205,7 +206,7 @@ impl HtmlElement {
                 return element.text().collect::<Vec<_>>().join("");
             }
         }
-        String::new()
+        self.html.clone()
     }
 
     pub fn attr(&self, name: &str) -> Option<String> {
@@ -251,6 +252,137 @@ impl HtmlElement {
             Ok(None)
         }
     }
+}
+
+fn xpath_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
+    let package = sxd_html::parse_html(source);
+    let document = package.as_document();
+
+    let factory = Factory::new();
+    let xpath = factory
+        .build(selector)
+        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
+    let xpath = xpath.ok_or_else(|| {
+        SilkwormError::Selector("Invalid XPath selector: empty expression".to_string())
+    })?;
+
+    let context = Context::new();
+    let value = xpath
+        .evaluate(&context, document.root())
+        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
+
+    Ok(xpath_value_to_elements(value))
+}
+
+fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
+    match value {
+        Value::Nodeset(nodeset) => nodeset
+            .document_order()
+            .into_iter()
+            .map(|node| HtmlElement {
+                html: xpath_node_to_html(node),
+            })
+            .collect(),
+        Value::Boolean(value) => vec![HtmlElement {
+            html: value.to_string(),
+        }],
+        Value::Number(value) => vec![HtmlElement {
+            html: value.to_string(),
+        }],
+        Value::String(value) => vec![HtmlElement { html: value }],
+    }
+}
+
+fn xpath_node_to_html(node: Node<'_>) -> String {
+    match node {
+        Node::Root(_) | Node::Element(_) => node_to_markup(node),
+        _ => node.string_value(),
+    }
+}
+
+fn element_to_html(element: Element<'_>) -> String {
+    let mut out = String::new();
+    out.push('<');
+    push_element_name(&mut out, element);
+
+    for attribute in element.attributes() {
+        out.push(' ');
+        push_attribute_name(&mut out, attribute);
+        out.push_str("=\"");
+        out.push_str(&escape_attr(attribute.value()));
+        out.push('"');
+    }
+
+    out.push('>');
+    for child in Node::Element(element).children() {
+        out.push_str(&node_to_markup(child));
+    }
+    out.push_str("</");
+    push_element_name(&mut out, element);
+    out.push('>');
+    out
+}
+
+fn node_to_markup(node: Node<'_>) -> String {
+    match node {
+        Node::Root(root) => Node::Root(root)
+            .children()
+            .into_iter()
+            .map(node_to_markup)
+            .collect(),
+        Node::Element(element) => element_to_html(element),
+        Node::Attribute(attribute) => escape_attr(attribute.value()),
+        Node::Text(text) => escape_text(text.text()),
+        Node::Comment(comment) => format!("<!--{}-->", comment.text()),
+        Node::ProcessingInstruction(pi) => match pi.value() {
+            Some(value) if !value.is_empty() => format!("<?{} {}?>", pi.target(), value),
+            _ => format!("<?{}?>", pi.target()),
+        },
+        Node::Namespace(namespace) => namespace.uri().to_string(),
+    }
+}
+
+fn push_element_name(out: &mut String, element: Element<'_>) {
+    if let Some(prefix) = element.preferred_prefix() {
+        out.push_str(prefix);
+        out.push(':');
+    }
+    out.push_str(element.name().local_part());
+}
+
+fn push_attribute_name(out: &mut String, attribute: Attribute<'_>) {
+    if let Some(prefix) = attribute.preferred_prefix() {
+        out.push_str(prefix);
+        out.push(':');
+    }
+    out.push_str(attribute.name().local_part());
+}
+
+fn escape_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_attr(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn decode_body(body: &[u8], headers: &Headers) -> (String, String) {

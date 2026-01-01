@@ -521,7 +521,21 @@ checksum = "c13771afe0e6e846f1e67d038d4cb29998a6779f93c809212e4e9c32efd244d4"
 dependencies = [
  "log",
  "mac",
- "markup5ever",
+ "markup5ever 0.12.1",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "html5ever"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ff6858c1f7e2a470c5403091866fa95b36fe0dbac5d771f932c15e5ff1ee501"
+dependencies = [
+ "log",
+ "mac",
+ "markup5ever 0.13.0",
  "proc-macro2",
  "quote",
  "syn",
@@ -786,6 +800,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "markup5ever"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d581ff8be69d08a2efa23a959d81aa22b739073f749f067348bd4f4ba4b69195"
+dependencies = [
+ "log",
+ "phf 0.11.3",
+ "phf_codegen 0.11.3",
+ "string_cache",
+ "string_cache_codegen",
+ "tendril",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -879,6 +907,12 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "peresil"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f658886ed52e196e850cfbbfddab9eaa7f6d90dd0929e264c31e5cec07e09e57"
 
 [[package]]
 name = "phf"
@@ -1022,6 +1056,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+
+[[package]]
 name = "quote"
 version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1143,7 +1183,7 @@ dependencies = [
  "cssparser",
  "ego-tree",
  "getopts",
- "html5ever",
+ "html5ever 0.27.0",
  "once_cell",
  "selectors",
  "tendril",
@@ -1238,6 +1278,9 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "sxd-document",
+ "sxd-xpath",
+ "sxd_html",
  "thiserror",
  "tokio",
  "url",
@@ -1313,6 +1356,37 @@ dependencies = [
  "phf_shared 0.11.3",
  "proc-macro2",
  "quote",
+]
+
+[[package]]
+name = "sxd-document"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d82f37be9faf1b10a82c4bd492b74f698e40082f0f40de38ab275f31d42078"
+dependencies = [
+ "peresil",
+ "typed-arena",
+]
+
+[[package]]
+name = "sxd-xpath"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36e39da5d30887b5690e29de4c5ebb8ddff64ebd9933f98a01daaa4fd11b36ea"
+dependencies = [
+ "peresil",
+ "quick-error",
+ "sxd-document",
+]
+
+[[package]]
+name = "sxd_html"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9832738b5e2e5bcc6edf07ef8024642e6851b8d90f2d3ad1be6c52b9a61ec343"
+dependencies = [
+ "html5ever 0.28.0",
+ "sxd-document",
 ]
 
 [[package]]
@@ -1486,6 +1560,12 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "typed-arena"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
 
 [[package]]
 name = "unicode-ident"

@@ -18,6 +18,9 @@ wreq = { version = "6.0.0-rc.26", default-features = false, features = ["json", 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 scraper = "0.19"
+sxd-document = "0.3"
+sxd_html = "0.1"
+sxd-xpath = "0.4"
 tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 url = "2.5"
 thiserror = "1.0"
