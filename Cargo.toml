@@ -21,6 +21,7 @@ scraper = "0.19"
 tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 url = "2.5"
 thiserror = "1.0"
+fasttime = "0.2"
 
 [dev-dependencies]
 # Add test dependencies here if needed

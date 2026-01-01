@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use fasttime::DateTime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -65,8 +66,12 @@ impl Logger {
 
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
+            .map(|d| {
+                DateTime::from_unix_timestamp(d.as_secs() as i64, d.subsec_nanos() as i32)
+                    .map(|dt| dt.to_string())
+                    .unwrap_or_else(|_| d.as_secs().to_string())
+            })
+            .unwrap_or_else(|_| "0".to_string());
 
         let mut parts = Vec::with_capacity(6 + self.context.len() + fields.len());
         parts.push(format!("ts={}", timestamp));
