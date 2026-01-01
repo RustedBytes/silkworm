@@ -158,6 +158,10 @@ impl<S> Request<S> {
         self
     }
 
+    pub fn with_allow_non_html(self, allow_non_html: bool) -> Self {
+        self.with_meta_bool("allow_non_html", allow_non_html)
+    }
+
     pub fn with_meta_number<N>(mut self, key: impl Into<String>, value: N) -> Self
     where
         N: Into<Number>,
@@ -266,6 +270,14 @@ impl<S> RequestBuilder<S> {
 
     pub fn priority(mut self, priority: i32) -> Self {
         self.request.priority = priority;
+        self
+    }
+
+    pub fn allow_non_html(mut self, allow_non_html: bool) -> Self {
+        self.request.meta.insert(
+            "allow_non_html".to_string(),
+            Item::Bool(allow_non_html),
+        );
         self
     }
 
@@ -380,6 +392,7 @@ mod tests {
             .param("q", "rust")
             .json(Item::from(1))
             .data(vec![1, 2, 3])
+            .allow_non_html(true)
             .dont_filter(true)
             .priority(9)
             .build();
@@ -392,8 +405,25 @@ mod tests {
         assert_eq!(req.params.get("q").map(String::as_str), Some("rust"));
         assert_eq!(req.json.as_ref().and_then(|v| v.as_i64()), Some(1));
         assert_eq!(req.data.as_ref().map(Vec::len), Some(3));
+        assert_eq!(
+            req.meta
+                .get("allow_non_html")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
         assert!(req.dont_filter);
         assert_eq!(req.priority, 9);
+    }
+
+    #[test]
+    fn request_allow_non_html_sets_meta() {
+        let req = Request::<()>::new("https://example.com").with_allow_non_html(true);
+        assert_eq!(
+            req.meta
+                .get("allow_non_html")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
     }
 
     #[tokio::test]

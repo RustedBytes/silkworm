@@ -126,7 +126,7 @@ impl Spider for SitemapSpider {
         vec![
             Request::get(self.sitemap_url.clone())
                 .with_callback_fn(parse_sitemap)
-                .with_meta_bool("allow_non_html", true)
+                .with_allow_non_html(true)
                 .with_dont_filter(true),
         ]
     }
@@ -173,7 +173,7 @@ fn parse_sitemap_inner(
         if is_index {
             let req = Request::get(url)
                 .with_callback_fn(parse_sitemap)
-                .with_meta_bool("allow_non_html", true)
+                .with_allow_non_html(true)
                 .with_dont_filter(true);
             out.push(req.into());
             continue;

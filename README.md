@@ -146,6 +146,14 @@ let request = Request::get("https://example.com/search")
     .with_headers([("Accept", "text/html"), ("User-Agent", "silkworm-rs/0.1")]);
 ```
 
+If `SkipNonHtmlMiddleware` is enabled, mark requests you want to handle as JSON/XML:
+
+```rust
+let request = Request::get("https://example.com/api")
+    .with_allow_non_html(true)
+    .with_callback_fn(parse_api);
+```
+
 ## Ergonomic Selectors
 
 Silkworm provides both error-returning and convenience selector methods for maximum flexibility:
@@ -162,6 +170,11 @@ let element = response.select_first_or_none(".item");  // Returns Option
 // Direct text/attribute extraction
 let title = response.text_from("h1");  // Empty string if not found
 let href = response.attr_from("a", "href");  // None if not found
+let tags = response.select_texts(".tag");  // Vec<String>
+let links = response.select_attrs("a.next", "href");  // Vec<String>
+
+// Follow links directly from selectors
+let next = response.follow_css_outputs("a.next", "href");
 
 // Also works on HtmlElement for nested selections
 for item in response.select_or_empty(".item") {

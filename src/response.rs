@@ -12,7 +12,7 @@ use sxd_xpath::{Context, Factory, Value};
 use url::Url;
 
 use crate::errors::{SilkwormError, SilkwormResult};
-use crate::request::{Callback, Request};
+use crate::request::{Callback, Request, SpiderOutput};
 use crate::types::Headers;
 
 #[derive(Clone)]
@@ -104,6 +104,14 @@ impl<S> Response<S> {
                 }
             })
             .collect()
+    }
+
+    pub fn follow_urls_outputs<I, H>(&self, hrefs: I) -> Vec<SpiderOutput<S>>
+    where
+        I: IntoIterator<Item = H>,
+        H: AsRef<str>,
+    {
+        self.follow_urls(hrefs).into_iter().map(Into::into).collect()
     }
 
     pub fn follow_all<I, H>(&self, hrefs: I, callback: Option<Callback<S>>) -> Vec<Request<S>>
@@ -334,6 +342,22 @@ impl<S> HtmlResponse<S> {
         self.xpath_first(selector).ok().flatten()
     }
 
+    /// Select elements matching a CSS selector and return their text.
+    pub fn select_texts(&self, selector: &str) -> Vec<String> {
+        self.select_or_empty(selector)
+            .into_iter()
+            .map(|el| el.text())
+            .collect()
+    }
+
+    /// Select elements matching a CSS selector and return the requested attribute values.
+    pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
+        self.select_or_empty(selector)
+            .into_iter()
+            .filter_map(|el| el.attr(attr_name))
+            .collect()
+    }
+
     /// Select the first element matching a CSS selector and return its text.
     /// Returns an empty string if the selector doesn't match or fails to parse.
     pub fn text_from(&self, selector: &str) -> String {
@@ -347,6 +371,16 @@ impl<S> HtmlResponse<S> {
     pub fn attr_from(&self, selector: &str, attr_name: &str) -> Option<String> {
         self.select_first_or_none(selector)
             .and_then(|el| el.attr(attr_name))
+    }
+
+    /// Follow links extracted from a CSS selector and attribute name.
+    pub fn follow_css(&self, selector: &str, attr_name: &str) -> Vec<Request<S>> {
+        self.follow_urls(self.select_attrs(selector, attr_name))
+    }
+
+    /// Follow links extracted from a CSS selector and attribute name, returning outputs.
+    pub fn follow_css_outputs(&self, selector: &str, attr_name: &str) -> Vec<SpiderOutput<S>> {
+        self.follow_urls_outputs(self.select_attrs(selector, attr_name))
     }
 
     fn html_source(&self) -> &str {
@@ -478,6 +512,22 @@ impl HtmlElement {
     pub fn attr_from(&self, selector: &str, attr_name: &str) -> Option<String> {
         self.select_first_or_none(selector)
             .and_then(|el| el.attr(attr_name))
+    }
+
+    /// Select elements matching a CSS selector and return their text.
+    pub fn select_texts(&self, selector: &str) -> Vec<String> {
+        self.select_or_empty(selector)
+            .into_iter()
+            .map(|el| el.text())
+            .collect()
+    }
+
+    /// Select elements matching a CSS selector and return the requested attribute values.
+    pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
+        self.select_or_empty(selector)
+            .into_iter()
+            .filter_map(|el| el.attr(attr_name))
+            .collect()
     }
 
     fn select_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
@@ -779,7 +829,7 @@ fn encoding_from_bom(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::Response;
-    use crate::request::{Request, SpiderResult, callback_from_fn};
+    use crate::request::{Request, SpiderOutput, SpiderResult, callback_from_fn};
     use crate::types::Headers;
     use std::sync::Arc;
 
@@ -1003,6 +1053,52 @@ mod tests {
         assert_eq!(html.attr_from("a", "class"), Some("test".to_string()));
         assert_eq!(html.attr_from("a", "missing"), None);
         assert_eq!(html.attr_from(".missing", "href"), None);
+    }
+
+    #[test]
+    fn select_texts_and_attrs_collect_values() {
+        let body = b"<html><body><ul><li>One</li><li>Two</li></ul><a href=\"/a\">A</a><a>Skip</a></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+
+        assert_eq!(
+            html.select_texts("li"),
+            vec!["One".to_string(), "Two".to_string()]
+        );
+        assert_eq!(html.select_attrs("a", "href"), vec!["/a".to_string()]);
+
+        let list = html.select_first_or_none("ul").expect("list");
+        assert_eq!(
+            list.select_texts("li"),
+            vec!["One".to_string(), "Two".to_string()]
+        );
+    }
+
+    #[test]
+    fn follow_css_outputs_builds_requests() {
+        let body = b"<html><body><a href=\"/next\">Next</a><a href=\"\"></a></body></html>";
+        let response = Response {
+            url: "https://example.com/base/".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: body.to_vec(),
+            request: Request::<()>::new("https://example.com/base/"),
+        };
+        let html = response.into_html(1024);
+        let outputs = html.follow_css_outputs("a", "href");
+        assert_eq!(outputs.len(), 1);
+        match &outputs[0] {
+            SpiderOutput::Request(req) => {
+                assert_eq!(req.url, "https://example.com/next");
+            }
+            SpiderOutput::Item(_) => panic!("expected request output"),
+        }
     }
 
     #[test]

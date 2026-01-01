@@ -38,11 +38,7 @@ impl Spider for QuotesSpider {
             }
 
             // Collect tags using the ergonomic API
-            let tag_values = quote
-                .select_or_empty(".tag")
-                .into_iter()
-                .map(|tag| tag.text())
-                .collect::<Vec<_>>();
+            let tag_values = quote.select_texts(".tag");
 
             let quote = QuoteItem {
                 text,
@@ -54,18 +50,8 @@ impl Spider for QuotesSpider {
             }
         }
 
-        // Using select_first_or_none() and attr_from() for cleaner pagination
-        let next_links = response
-            .select_or_empty("li.next > a")
-            .into_iter()
-            .filter_map(|link| link.attr("href"))
-            .collect::<Vec<_>>();
-        out.extend(
-            response
-                .follow_urls(next_links)
-                .into_iter()
-                .map(Into::into),
-        );
+        // Using follow_css_outputs() for cleaner pagination
+        out.extend(response.follow_css_outputs("li.next > a", "href"));
 
         out
     }
