@@ -39,7 +39,7 @@ impl Spider for LoggingSpider {
             ],
         );
         let item = PageStatus {
-            url: response.url,
+            url: response.url.clone(),
             status: response.status,
         };
         if let Ok(item) = item_from(item) {

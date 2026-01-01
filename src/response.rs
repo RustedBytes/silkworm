@@ -95,9 +95,14 @@ impl<S> Response<S> {
     {
         hrefs
             .into_iter()
-            .map(|href| href.as_ref())
-            .filter(|href| !href.is_empty())
-            .map(|href| self.follow_url(href))
+            .filter_map(|href| {
+                let href = href.as_ref();
+                if href.is_empty() {
+                    None
+                } else {
+                    Some(self.follow_url(href))
+                }
+            })
             .collect()
     }
 

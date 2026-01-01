@@ -70,7 +70,7 @@ fn print_item(item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item> {
                 .to_string();
             (author, text)
         });
-    println!("[{}] {}: {}", spider.name(), author, snippet(text, 50));
+    println!("[{}] {}: {}", spider.name(), author, snippet(&text, 50));
     Ok(item)
 }
 
