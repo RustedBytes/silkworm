@@ -2,7 +2,6 @@ use fasttime::DateTime;
 use std::env;
 use std::io::{self, Write};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -13,21 +12,19 @@ enum Level {
     Error = 4,
 }
 
-static MIN_LEVEL: AtomicUsize = AtomicUsize::new(Level::Info as usize);
-static INIT: OnceLock<()> = OnceLock::new();
+static MIN_LEVEL: OnceLock<Level> = OnceLock::new();
 
-fn init_logging() {
-    INIT.get_or_init(|| {
+fn min_level() -> Level {
+    *MIN_LEVEL.get_or_init(|| {
         let level = env::var("SILKWORM_LOG_LEVEL").unwrap_or_else(|_| "INFO".to_string());
-        let parsed = match level.to_uppercase().as_str() {
+        match level.to_uppercase().as_str() {
             "TRACE" | "DEBUG" => Level::Debug,
             "INFO" => Level::Info,
             "WARN" | "WARNING" => Level::Warn,
             "ERROR" | "ERR" | "FAIL" | "FATAL" | "CRITICAL" => Level::Error,
             _ => Level::Info,
-        };
-        MIN_LEVEL.store(parsed as usize, Ordering::Relaxed);
-    });
+        }
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -59,8 +56,8 @@ impl Logger {
     }
 
     fn log(&self, level: Level, message: &str, fields: &[(&str, String)]) {
-        init_logging();
-        if (level as usize) < MIN_LEVEL.load(Ordering::Relaxed) {
+        let min_level = min_level();
+        if level < min_level {
             return;
         }
 
@@ -91,7 +88,7 @@ impl Logger {
 }
 
 pub fn get_logger(component: &str, spider: Option<&str>) -> Logger {
-    init_logging();
+    let _ = min_level();
     let mut context = Vec::new();
     if !component.is_empty() {
         context.push(("component".to_string(), component.to_string()));

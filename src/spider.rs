@@ -60,11 +60,8 @@ mod tests {
             ]
         }
 
-        fn parse(
-            &self,
-            _response: HtmlResponse<Self>,
-        ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
-            async { Vec::new() }
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Vec::new()
         }
     }
 

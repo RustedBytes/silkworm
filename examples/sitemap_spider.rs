@@ -122,13 +122,17 @@ impl Spider for SitemapSpider {
         "sitemap_metadata"
     }
 
-    async fn start_requests(&self) -> Vec<Request<Self>> {
-        vec![
-            Request::get(self.sitemap_url.clone())
-                .with_callback_fn(parse_sitemap)
-                .with_allow_non_html(true)
-                .with_dont_filter(true),
-        ]
+    fn start_requests(
+        &self,
+    ) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
+        async move {
+            vec![
+                Request::get(self.sitemap_url.clone())
+                    .with_callback_fn(parse_sitemap)
+                    .with_allow_non_html(true)
+                    .with_dont_filter(true),
+            ]
+        }
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {

@@ -2,6 +2,7 @@
 name = "silkworm"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.92"
 license = "MIT"
 description = "Async-first web scraping framework (Rust port)"
 repository = "https://github.com/RustedBytes/silkworm"
@@ -16,7 +17,6 @@ name = "silkworm"
 path = "src/lib.rs"
 
 [dependencies]
-async-trait = "0.1"
 bytes = "1.6"
 encoding_rs = "0.8"
 rand = "0.8"

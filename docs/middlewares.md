@@ -12,13 +12,20 @@ Code:
 - Middleware traits and actions: `../src/middlewares.rs`
 
 ```rust
+use silkworm::middlewares::MiddlewareFuture;
+
 struct TraceMiddleware;
 
-#[async_trait::async_trait]
 impl<S: Spider> RequestMiddleware<S> for TraceMiddleware {
-    async fn process_request(&self, mut request: Request<S>, _spider: Arc<S>) -> Request<S> {
-        request.headers.insert("X-Trace".to_string(), "1".to_string());
-        request
+    fn process_request<'a>(
+        &'a self,
+        mut request: Request<S>,
+        _spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, Request<S>> {
+        Box::pin(async move {
+            request.headers.insert("X-Trace".to_string(), "1".to_string());
+            request
+        })
     }
 }
 ```

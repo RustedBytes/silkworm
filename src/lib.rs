@@ -20,10 +20,12 @@ pub use errors::{SilkwormError, SilkwormResult};
 pub use http::HttpClient;
 pub use logging::{Logger, complete_logs, get_logger};
 pub use middlewares::{
-    DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
-    RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
+    DelayMiddleware, MiddlewareFuture, ProxyMiddleware, RequestMiddleware, ResponseAction,
+    ResponseMiddleware, RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
 };
-pub use pipelines::{CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, XmlPipeline};
+pub use pipelines::{
+    CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, PipelineFuture, XmlPipeline,
+};
 pub use request::{
     Callback, CallbackFuture, Request, SpiderOutput, SpiderResult, callback_from, callback_from_fn,
 };

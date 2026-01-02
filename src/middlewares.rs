@@ -1,8 +1,9 @@
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use rand::Rng;
 use tokio::time::sleep;
 
@@ -12,9 +13,14 @@ use crate::response::Response;
 use crate::spider::Spider;
 use crate::types::Item;
 
-#[async_trait]
+pub type MiddlewareFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 pub trait RequestMiddleware<S: Spider>: Send + Sync {
-    async fn process_request(&self, request: Request<S>, spider: Arc<S>) -> Request<S>;
+    fn process_request<'a>(
+        &'a self,
+        request: Request<S>,
+        spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, Request<S>>;
 }
 
 #[derive(Debug)]
@@ -23,9 +29,12 @@ pub enum ResponseAction<S> {
     Request(Request<S>),
 }
 
-#[async_trait]
 pub trait ResponseMiddleware<S: Spider>: Send + Sync {
-    async fn process_response(&self, response: Response<S>, spider: Arc<S>) -> ResponseAction<S>;
+    fn process_response<'a>(
+        &'a self,
+        response: Response<S>,
+        spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, ResponseAction<S>>;
 }
 
 pub struct UserAgentMiddleware {
@@ -44,26 +53,31 @@ impl UserAgentMiddleware {
     }
 }
 
-#[async_trait]
 impl<S: Spider> RequestMiddleware<S> for UserAgentMiddleware {
-    async fn process_request(&self, mut request: Request<S>, _spider: Arc<S>) -> Request<S> {
-        let has_header = request
-            .headers
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case("user-agent"));
-        if !has_header {
-            let ua = if self.user_agents.is_empty() {
-                self.default.clone()
-            } else {
-                let mut rng = rand::thread_rng();
-                let idx = rng.gen_range(0..self.user_agents.len());
-                self.user_agents[idx].clone()
-            };
-            request.headers.insert("User-Agent".to_string(), ua.clone());
-            self.logger
-                .debug("Assigned user agent", &[("user_agent", ua)]);
-        }
-        request
+    fn process_request<'a>(
+        &'a self,
+        mut request: Request<S>,
+        _spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, Request<S>> {
+        Box::pin(async move {
+            let has_header = request
+                .headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("user-agent"));
+            if !has_header {
+                let ua = if self.user_agents.is_empty() {
+                    self.default.clone()
+                } else {
+                    let mut rng = rand::thread_rng();
+                    let idx = rng.gen_range(0..self.user_agents.len());
+                    self.user_agents[idx].clone()
+                };
+                request.headers.insert("User-Agent".to_string(), ua.clone());
+                self.logger
+                    .debug("Assigned user agent", &[("user_agent", ua)]);
+            }
+            request
+        })
     }
 }
 
@@ -96,27 +110,32 @@ impl ProxyMiddleware {
     }
 }
 
-#[async_trait]
 impl<S: Spider> RequestMiddleware<S> for ProxyMiddleware {
-    async fn process_request(&self, mut request: Request<S>, _spider: Arc<S>) -> Request<S> {
-        if self.proxies.is_empty() {
-            return request;
-        }
-        let proxy = if self.random_selection {
-            let mut rng = rand::thread_rng();
-            let idx = rng.gen_range(0..self.proxies.len());
-            self.proxies[idx].clone()
-        } else {
-            let mut guard = self.index.lock().expect("proxy index lock");
-            let proxy = self.proxies[*guard % self.proxies.len()].clone();
-            *guard = (*guard + 1) % self.proxies.len();
-            proxy
-        };
-        request
-            .meta
-            .insert("proxy".to_string(), Item::from(proxy.clone()));
-        self.logger.debug("Assigned proxy", &[("proxy", proxy)]);
-        request
+    fn process_request<'a>(
+        &'a self,
+        mut request: Request<S>,
+        _spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, Request<S>> {
+        Box::pin(async move {
+            if self.proxies.is_empty() {
+                return request;
+            }
+            let proxy = if self.random_selection {
+                let mut rng = rand::thread_rng();
+                let idx = rng.gen_range(0..self.proxies.len());
+                self.proxies[idx].clone()
+            } else {
+                let mut guard = self.index.lock().expect("proxy index lock");
+                let proxy = self.proxies[*guard % self.proxies.len()].clone();
+                *guard = (*guard + 1) % self.proxies.len();
+                proxy
+            };
+            request
+                .meta
+                .insert("proxy".to_string(), Item::from(proxy.clone()));
+            self.logger.debug("Assigned proxy", &[("proxy", proxy)]);
+            request
+        })
     }
 }
 
@@ -156,46 +175,51 @@ impl RetryMiddleware {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
-    async fn process_response(&self, response: Response<S>, _spider: Arc<S>) -> ResponseAction<S> {
-        let status = response.status;
-        if !self.retry_http_codes.contains(&status) {
-            return ResponseAction::Response(response);
-        }
+    fn process_response<'a>(
+        &'a self,
+        response: Response<S>,
+        _spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, ResponseAction<S>> {
+        Box::pin(async move {
+            let status = response.status;
+            if !self.retry_http_codes.contains(&status) {
+                return ResponseAction::Response(response);
+            }
 
-        let retry_times = response
-            .request
-            .meta
-            .get("retry_times")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(0);
+            let retry_times = response
+                .request
+                .meta
+                .get("retry_times")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
 
-        if retry_times >= self.max_times {
-            return ResponseAction::Response(response);
-        }
+            if retry_times >= self.max_times {
+                return ResponseAction::Response(response);
+            }
 
-        let mut req = response.request.clone();
-        req.dont_filter = true;
-        req.meta
-            .insert("retry_times".to_string(), Item::from(retry_times + 1));
+            let mut req = response.request.clone();
+            req.dont_filter = true;
+            req.meta
+                .insert("retry_times".to_string(), Item::from(retry_times + 1));
 
-        let delay = self.backoff_base * 2f64.powi(retry_times as i32);
-        self.logger.warn(
-            "Retrying request",
-            &[
-                ("url", req.url.clone()),
-                ("delay", format!("{:.2}", delay)),
-                ("attempt", (retry_times + 1).to_string()),
-                ("status", status.to_string()),
-            ],
-        );
+            let delay = self.backoff_base * 2f64.powi(retry_times as i32);
+            self.logger.warn(
+                "Retrying request",
+                &[
+                    ("url", req.url.clone()),
+                    ("delay", format!("{:.2}", delay)),
+                    ("attempt", (retry_times + 1).to_string()),
+                    ("status", status.to_string()),
+                ],
+            );
 
-        if self.sleep_http_codes.contains(&status) && delay > 0.0 {
-            sleep(Duration::from_secs_f64(delay)).await;
-        }
+            if self.sleep_http_codes.contains(&status) && delay > 0.0 {
+                sleep(Duration::from_secs_f64(delay)).await;
+            }
 
-        ResponseAction::Request(req)
+            ResponseAction::Request(req)
+        })
     }
 }
 
@@ -238,34 +262,39 @@ impl<S: Spider> DelayMiddleware<S> {
     }
 }
 
-#[async_trait]
 impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
-    async fn process_request(&self, request: Request<S>, spider: Arc<S>) -> Request<S> {
-        let delay = match &self.strategy {
-            DelayStrategy::Fixed(value) => *value,
-            DelayStrategy::Random(min_delay, max_delay) => {
-                if max_delay <= min_delay {
-                    *min_delay
-                } else {
-                    let mut rng = rand::thread_rng();
-                    rng.gen_range(*min_delay..*max_delay)
+    fn process_request<'a>(
+        &'a self,
+        request: Request<S>,
+        spider: Arc<S>,
+    ) -> MiddlewareFuture<'a, Request<S>> {
+        Box::pin(async move {
+            let delay = match &self.strategy {
+                DelayStrategy::Fixed(value) => *value,
+                DelayStrategy::Random(min_delay, max_delay) => {
+                    if max_delay <= min_delay {
+                        *min_delay
+                    } else {
+                        let mut rng = rand::thread_rng();
+                        rng.gen_range(*min_delay..*max_delay)
+                    }
                 }
+                DelayStrategy::Custom(func) => func(&request, spider.as_ref()),
+            };
+
+            if delay > 0.0 {
+                self.logger.debug(
+                    "Delaying request",
+                    &[
+                        ("url", request.url.clone()),
+                        ("delay", format!("{:.3}", delay)),
+                    ],
+                );
+                sleep(Duration::from_secs_f64(delay)).await;
             }
-            DelayStrategy::Custom(func) => func(&request, spider.as_ref()),
-        };
 
-        if delay > 0.0 {
-            self.logger.debug(
-                "Delaying request",
-                &[
-                    ("url", request.url.clone()),
-                    ("delay", format!("{:.3}", delay)),
-                ],
-            );
-            sleep(Duration::from_secs_f64(delay)).await;
-        }
-
-        request
+            request
+        })
     }
 }
 
@@ -292,49 +321,50 @@ impl SkipNonHtmlMiddleware {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
-    async fn process_response(
-        &self,
+    fn process_response<'a>(
+        &'a self,
         mut response: Response<S>,
         _spider: Arc<S>,
-    ) -> ResponseAction<S> {
-        if response
-            .request
-            .meta
-            .get("allow_non_html")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-        {
-            return ResponseAction::Response(response);
-        }
+    ) -> MiddlewareFuture<'a, ResponseAction<S>> {
+        Box::pin(async move {
+            if response
+                .request
+                .meta
+                .get("allow_non_html")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return ResponseAction::Response(response);
+            }
 
-        if looks_like_html(&response, &self.allowed_types, self.sniff_bytes) {
-            return ResponseAction::Response(response);
-        }
+            if looks_like_html(&response, &self.allowed_types, self.sniff_bytes) {
+                return ResponseAction::Response(response);
+            }
 
-        self.logger.info(
-            "Skipping non-HTML response",
-            &[
-                ("url", response.url.clone()),
-                ("status", response.status.to_string()),
-                (
-                    "content_type",
-                    response
-                        .headers
-                        .get("content-type")
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_string()),
-                ),
-            ],
-        );
+            self.logger.info(
+                "Skipping non-HTML response",
+                &[
+                    ("url", response.url.clone()),
+                    ("status", response.status.to_string()),
+                    (
+                        "content_type",
+                        response
+                            .headers
+                            .get("content-type")
+                            .cloned()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                ],
+            );
 
-        if self.drop_body_on_skip {
-            response.body = bytes::Bytes::new();
-            response.headers.clear();
-        }
-        response.request.callback = Some(noop_callback());
-        ResponseAction::Response(response)
+            if self.drop_body_on_skip {
+                response.body = bytes::Bytes::new();
+                response.headers.clear();
+            }
+            response.request.callback = Some(noop_callback());
+            ResponseAction::Response(response)
+        })
     }
 }
 
@@ -406,11 +436,8 @@ mod tests {
             "test"
         }
 
-        fn parse(
-            &self,
-            _response: HtmlResponse<Self>,
-        ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
-            async { Vec::new() }
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Vec::new()
         }
     }
 

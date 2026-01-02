@@ -13,12 +13,23 @@ Code:
 - Engine integration: `../src/engine.rs`
 
 ```rust
-#[async_trait::async_trait]
+use silkworm::pipelines::PipelineFuture;
+
 impl<S: Spider> ItemPipeline<S> for CustomPipeline {
-    async fn open(&self, _spider: Arc<S>) -> SilkwormResult<()> { Ok(()) }
-    async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> { Ok(()) }
-    async fn process_item(&self, item: Item, _spider: Arc<S>) -> SilkwormResult<Item> {
-        Ok(item)
+    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        _spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+        Box::pin(async move { Ok(item) })
     }
 }
 ```

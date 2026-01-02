@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex as AsyncMutex;
@@ -14,17 +13,22 @@ use crate::logging::get_logger;
 use crate::spider::Spider;
 use crate::types::Item;
 
-#[async_trait]
+pub type PipelineFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 pub trait ItemPipeline<S: Spider>: Send + Sync {
-    async fn open(&self, spider: Arc<S>) -> SilkwormResult<()>;
-    async fn close(&self, spider: Arc<S>) -> SilkwormResult<()>;
-    async fn process_item(&self, item: Item, spider: Arc<S>) -> SilkwormResult<Item>;
+    fn open<'a>(&'a self, spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>>;
+    fn close<'a>(&'a self, spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>>;
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>>;
 }
 
-type PipelineFuture = Pin<Box<dyn Future<Output = SilkwormResult<Item>> + Send>>;
+type PipelineCallbackFuture = Pin<Box<dyn Future<Output = SilkwormResult<Item>> + Send>>;
 
 pub struct CallbackPipeline<S: Spider> {
-    callback: Arc<dyn Fn(Item, Arc<S>) -> PipelineFuture + Send + Sync>,
+    callback: Arc<dyn Fn(Item, Arc<S>) -> PipelineCallbackFuture + Send + Sync>,
     logger: crate::logging::Logger,
 }
 
@@ -34,8 +38,10 @@ impl<S: Spider> CallbackPipeline<S> {
         F: Fn(Item, Arc<S>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = SilkwormResult<Item>> + Send + 'static,
     {
-        let cb: Arc<dyn Fn(Item, Arc<S>) -> PipelineFuture + Send + Sync> =
-            Arc::new(move |item, spider| -> PipelineFuture { Box::pin(callback(item, spider)) });
+        let cb: Arc<dyn Fn(Item, Arc<S>) -> PipelineCallbackFuture + Send + Sync> =
+            Arc::new(move |item, spider| -> PipelineCallbackFuture {
+                Box::pin(callback(item, spider))
+            });
         CallbackPipeline {
             callback: cb,
             logger: get_logger("CallbackPipeline", None),
@@ -46,8 +52,8 @@ impl<S: Spider> CallbackPipeline<S> {
     where
         F: Fn(Item, Arc<S>) -> SilkwormResult<Item> + Send + Sync + 'static,
     {
-        let cb: Arc<dyn Fn(Item, Arc<S>) -> PipelineFuture + Send + Sync> =
-            Arc::new(move |item, spider| -> PipelineFuture {
+        let cb: Arc<dyn Fn(Item, Arc<S>) -> PipelineCallbackFuture + Send + Sync> =
+            Arc::new(move |item, spider| -> PipelineCallbackFuture {
                 let result = callback(item, spider);
                 Box::pin(async move { result })
             });
@@ -58,20 +64,27 @@ impl<S: Spider> CallbackPipeline<S> {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ItemPipeline<S> for CallbackPipeline<S> {
-    async fn open(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        self.logger.info("Opened Callback pipeline", &[]);
-        Ok(())
+    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            self.logger.info("Opened Callback pipeline", &[]);
+            Ok(())
+        })
     }
 
-    async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        self.logger.info("Closed Callback pipeline", &[]);
-        Ok(())
+    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            self.logger.info("Closed Callback pipeline", &[]);
+            Ok(())
+        })
     }
 
-    async fn process_item(&self, item: Item, spider: Arc<S>) -> SilkwormResult<Item> {
-        (self.callback)(item, spider).await
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+        Box::pin(async move { (self.callback)(item, spider).await })
     }
 }
 
@@ -95,50 +108,58 @@ impl JsonLinesPipeline {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
-    async fn open(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .await?;
-        let mut guard = self.state.lock().await;
-        guard.file = Some(BufWriter::new(file));
-        self.logger.info(
-            "Opened JSON Lines pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
+    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            if let Some(parent) = self.path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+                .await?;
+            let mut guard = self.state.lock().await;
+            guard.file = Some(BufWriter::new(file));
+            self.logger.info(
+                "Opened JSON Lines pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
     }
 
-    async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        let mut guard = self.state.lock().await;
-        if let Some(file) = guard.file.as_mut() {
-            file.flush().await?;
-        }
-        guard.file = None;
-        self.logger.info(
-            "Closed JSON Lines pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
+    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            let mut guard = self.state.lock().await;
+            if let Some(file) = guard.file.as_mut() {
+                file.flush().await?;
+            }
+            guard.file = None;
+            self.logger.info(
+                "Closed JSON Lines pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
     }
 
-    async fn process_item(&self, item: Item, _spider: Arc<S>) -> SilkwormResult<Item> {
-        let line = serde_json::to_string(&item)
-            .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
-        let mut guard = self.state.lock().await;
-        let file = guard
-            .file
-            .as_mut()
-            .ok_or_else(|| SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string()))?;
-        file.write_all(line.as_bytes()).await?;
-        file.write_all(b"\n").await?;
-        Ok(item)
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        _spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+        Box::pin(async move {
+            let line = serde_json::to_string(&item)
+                .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
+            let mut guard = self.state.lock().await;
+            let file = guard.file.as_mut().ok_or_else(|| {
+                SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string())
+            })?;
+            file.write_all(line.as_bytes()).await?;
+            file.write_all(b"\n").await?;
+            Ok(item)
+        })
     }
 }
 
@@ -168,92 +189,101 @@ impl CsvPipeline {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ItemPipeline<S> for CsvPipeline {
-    async fn open(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.path)
-            .await?;
-        let mut guard = self.state.lock().await;
-        guard.file = Some(BufWriter::new(file));
-        guard.header_written = false;
-        self.logger.info(
-            "Opened CSV pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
-    }
-
-    async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        let mut guard = self.state.lock().await;
-        if let Some(file) = guard.file.as_mut() {
-            file.flush().await?;
-        }
-        guard.file = None;
-        self.logger.info(
-            "Closed CSV pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
-    }
-
-    async fn process_item(&self, item: Item, _spider: Arc<S>) -> SilkwormResult<Item> {
-        let flattened = flatten_item(&item);
-        let mut guard = self.state.lock().await;
-        if guard.fieldnames.is_none() {
-            guard.fieldnames = Some(flattened.keys().cloned().collect());
-        }
-        let (header, row, write_header) = {
-            let fieldnames = guard.fieldnames.as_ref().ok_or_else(|| {
-                SilkwormError::Pipeline("CsvPipeline fieldnames missing".to_string())
-            })?;
-            let header = if !guard.header_written {
-                Some(
-                    fieldnames
-                        .iter()
-                        .map(|name| csv_escape(name))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                )
-            } else {
-                None
-            };
-            let row = fieldnames
-                .iter()
-                .map(|name| flattened.get(name).cloned().unwrap_or_default())
-                .map(|value| csv_escape(&value))
-                .collect::<Vec<_>>()
-                .join(",");
-            let write_header = !guard.header_written;
-            (header, row, write_header)
-        };
-
-        if write_header {
-            if let Some(header) = header.as_ref() {
-                {
-                    let file = guard.file.as_mut().ok_or_else(|| {
-                        SilkwormError::Pipeline("CsvPipeline not opened".to_string())
-                    })?;
-                    file.write_all(header.as_bytes()).await?;
-                    file.write_all(b"\n").await?;
-                }
+    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            if let Some(parent) = self.path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
             }
-            guard.header_written = true;
-        }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)
+                .await?;
+            let mut guard = self.state.lock().await;
+            guard.file = Some(BufWriter::new(file));
+            guard.header_written = false;
+            self.logger.info(
+                "Opened CSV pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
+    }
 
-        let file = guard
-            .file
-            .as_mut()
-            .ok_or_else(|| SilkwormError::Pipeline("CsvPipeline not opened".to_string()))?;
-        file.write_all(row.as_bytes()).await?;
-        file.write_all(b"\n").await?;
-        Ok(item)
+    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            let mut guard = self.state.lock().await;
+            if let Some(file) = guard.file.as_mut() {
+                file.flush().await?;
+            }
+            guard.file = None;
+            self.logger.info(
+                "Closed CSV pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
+    }
+
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        _spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+        Box::pin(async move {
+            let flattened = flatten_item(&item);
+            let mut guard = self.state.lock().await;
+            if guard.fieldnames.is_none() {
+                guard.fieldnames = Some(flattened.keys().cloned().collect());
+            }
+            let (header, row, write_header) = {
+                let fieldnames = guard.fieldnames.as_ref().ok_or_else(|| {
+                    SilkwormError::Pipeline("CsvPipeline fieldnames missing".to_string())
+                })?;
+                let header = if !guard.header_written {
+                    Some(
+                        fieldnames
+                            .iter()
+                            .map(|name| csv_escape(name))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                } else {
+                    None
+                };
+                let row = fieldnames
+                    .iter()
+                    .map(|name| flattened.get(name).cloned().unwrap_or_default())
+                    .map(|value| csv_escape(&value))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let write_header = !guard.header_written;
+                (header, row, write_header)
+            };
+
+            if write_header {
+                if let Some(header) = header.as_ref() {
+                    {
+                        let file = guard.file.as_mut().ok_or_else(|| {
+                            SilkwormError::Pipeline("CsvPipeline not opened".to_string())
+                        })?;
+                        file.write_all(header.as_bytes()).await?;
+                        file.write_all(b"\n").await?;
+                    }
+                }
+                guard.header_written = true;
+            }
+
+            let file = guard
+                .file
+                .as_mut()
+                .ok_or_else(|| SilkwormError::Pipeline("CsvPipeline not opened".to_string()))?;
+            file.write_all(row.as_bytes()).await?;
+            file.write_all(b"\n").await?;
+            Ok(item)
+        })
     }
 }
 
@@ -277,56 +307,65 @@ impl XmlPipeline {
     }
 }
 
-#[async_trait]
 impl<S: Spider> ItemPipeline<S> for XmlPipeline {
-    async fn open(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.path)
-            .await?;
-        let mut guard = self.file.lock().await;
-        let mut file = BufWriter::new(file);
-        let header = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<{}>\n",
-            sanitize_tag(&self.root_element)
-        );
-        file.write_all(header.as_bytes()).await?;
-        *guard = Some(file);
-        self.logger.info(
-            "Opened XML pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
+    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            if let Some(parent) = self.path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)
+                .await?;
+            let mut guard = self.file.lock().await;
+            let mut file = BufWriter::new(file);
+            let header = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<{}>\n",
+                sanitize_tag(&self.root_element)
+            );
+            file.write_all(header.as_bytes()).await?;
+            *guard = Some(file);
+            self.logger.info(
+                "Opened XML pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
     }
 
-    async fn close(&self, _spider: Arc<S>) -> SilkwormResult<()> {
-        let mut guard = self.file.lock().await;
-        if let Some(file) = guard.as_mut() {
-            let footer = format!("</{}>\n", sanitize_tag(&self.root_element));
-            file.write_all(footer.as_bytes()).await?;
-            file.flush().await?;
-        }
-        *guard = None;
-        self.logger.info(
-            "Closed XML pipeline",
-            &[("path", self.path.display().to_string())],
-        );
-        Ok(())
+    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+        Box::pin(async move {
+            let mut guard = self.file.lock().await;
+            if let Some(file) = guard.as_mut() {
+                let footer = format!("</{}>\n", sanitize_tag(&self.root_element));
+                file.write_all(footer.as_bytes()).await?;
+                file.flush().await?;
+            }
+            *guard = None;
+            self.logger.info(
+                "Closed XML pipeline",
+                &[("path", self.path.display().to_string())],
+            );
+            Ok(())
+        })
     }
 
-    async fn process_item(&self, item: Item, _spider: Arc<S>) -> SilkwormResult<Item> {
-        let mut guard = self.file.lock().await;
-        let file = guard
-            .as_mut()
-            .ok_or_else(|| SilkwormError::Pipeline("XmlPipeline not opened".to_string()))?;
-        let xml = build_xml(&self.item_element, &item, 1);
-        file.write_all(xml.as_bytes()).await?;
-        Ok(item)
+    fn process_item<'a>(
+        &'a self,
+        item: Item,
+        _spider: Arc<S>,
+    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+        Box::pin(async move {
+            let mut guard = self.file.lock().await;
+            let file = guard
+                .as_mut()
+                .ok_or_else(|| SilkwormError::Pipeline("XmlPipeline not opened".to_string()))?;
+            let xml = build_xml(&self.item_element, &item, 1);
+            file.write_all(xml.as_bytes()).await?;
+            Ok(item)
+        })
     }
 }
 

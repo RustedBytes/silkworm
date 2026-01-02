@@ -7,8 +7,8 @@ requests or scraped items.
 ## Spider
 
 The `Spider` trait defines the crawler's identity, lifecycle, start URLs, and
-parse logic. It uses async methods returning futures and can be customized
-without needing boilerplate.
+parse logic. It uses async methods and can be customized without needing
+boilerplate.
 
 Key methods:
 - `name`: label used in logging.
@@ -30,11 +30,8 @@ impl Spider for QuotesSpider {
         vec!["https://quotes.toscrape.com/".to_string()]
     }
 
-    fn parse(
-        &self,
-        response: HtmlResponse<Self>,
-    ) -> impl std::future::Future<Output = SpiderResult<Self>> + Send + '_ {
-        async { Vec::new() }
+    async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
+        Vec::new()
     }
 }
 ```
