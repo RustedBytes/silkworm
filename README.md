@@ -1,19 +1,21 @@
 # Silkworm (Rust)
 
-Async-first web scraping framework inspired by Silkworm, built on `wreq` +
-`scraper` (with XPath support via `sxd-xpath`). It provides a minimal
-Spider/Request/Response model, middlewares, pipelines, and structured logging so
-you can write crawlers without boilerplate.
+Async-first web scraping framework for Rust. Built on `wreq` + `scraper` with
+XPath support via `sxd-xpath`. It keeps the API small
+(Spider/Request/Response), adds middlewares and pipelines, and ships with
+structured logging so you can focus on crawling.
 
 ## Features
 
-- Async engine with configurable concurrency, backpressure, and request de-dupe.
-- Request/Response model with helpers for redirects, params merging, and `follow`.
-- HTML parsing helpers for CSS and XPath (`select`, `select_first`, `css`,
-  `css_first`, `xpath`, `xpath_first`).
-- Middleware system (User-Agent, proxy rotation, delay, retry, skip non-HTML).
+- Async engine with configurable concurrency, queue limits, and request de-dupe.
+- Minimal Spider/Request/Response model with follow helpers and callback
+  overrides.
+- HTML helpers for CSS and XPath (`select`, `select_first`, `xpath`,
+  `xpath_first`) plus ergonomic variants.
+- Built-in middlewares for user agents, proxy rotation, delays, retries, and
+  skipping non-HTML.
 - Pipelines for JSON Lines, CSV, XML, or custom callbacks.
-- Structured logging with crawl statistics (`SILKWORM_LOG_LEVEL`).
+- Structured logging with periodic crawl statistics (`SILKWORM_LOG_LEVEL`).
 
 ## Install
 
@@ -32,6 +34,8 @@ The examples below also use `serde_json` for convenience:
 ```bash
 cargo add serde_json
 ```
+
+Tip: `use silkworm::prelude::*;` for the most common types.
 
 ## Quick Start
 
@@ -52,12 +56,11 @@ impl Spider for QuotesSpider {
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
         let mut out = Vec::new();
-        
-        // Using ergonomic selectors - no match statements needed!
+
         for quote in response.select_or_empty(".quote") {
             let text = quote.text_from(".text");
             let author = quote.text_from(".author");
-            
+
             if !text.is_empty() && !author.is_empty() {
                 out.push(json!({
                     "text": text,
@@ -66,6 +69,8 @@ impl Spider for QuotesSpider {
             }
         }
 
+        // Follow pagination links.
+        out.extend(response.follow_css_outputs("li.next a", "href"));
         out
     }
 }
@@ -80,11 +85,12 @@ fn main() -> silkworm::SilkwormResult<()> {
 If you already run a Tokio runtime, use `crawl`/`crawl_with`:
 
 ```rust
-use silkworm::{crawl, HtmlResponse, Spider, SpiderResult};
+use silkworm::{crawl_with, RunConfig};
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    crawl(QuotesSpider).await
+    let config = RunConfig::new().with_concurrency(32);
+    crawl_with(QuotesSpider, config).await
 }
 ```
 
@@ -114,7 +120,8 @@ Enable built-ins by adding them to the run config:
 use std::time::Duration;
 
 use silkworm::{
-    DelayMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, UserAgentMiddleware,
+    DelayMiddleware, ProxyMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
+    UserAgentMiddleware,
 };
 
 let config = RunConfig::new()
@@ -123,6 +130,10 @@ let config = RunConfig::new()
         Some("silkworm-rs/0.1".to_string()),
     ))
     .with_request_middleware(DelayMiddleware::fixed(0.25))
+    .with_request_middleware(ProxyMiddleware::new(
+        vec!["http://proxy.local:8080".to_string()],
+        true,
+    ))
     .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
     .with_response_middleware(SkipNonHtmlMiddleware::new(None, 1024))
     .with_request_timeout(Duration::from_secs(15));
@@ -150,9 +161,12 @@ If `SkipNonHtmlMiddleware` is enabled, mark requests you want to handle as JSON/
 
 ```rust
 let request = Request::get("https://example.com/api")
-    .with_allow_non_html(true)
-    .with_callback_fn(parse_api);
+    .with_headers([("Accept", "application/json")])
+    .with_allow_non_html(true);
 ```
+
+For per-request parsing, attach a callback with `with_callback_fn` or
+`callback_from_fn` (signature: `Fn(Arc<S>, Response<S>) -> SpiderResult<S>`).
 
 ## Ergonomic Selectors
 
@@ -174,7 +188,7 @@ let tags = response.select_texts(".tag");  // Vec<String>
 let links = response.select_attrs("a.next", "href");  // Vec<String>
 
 // Follow links directly from selectors
-let next = response.follow_css_outputs("a.next", "href");
+let next_requests = response.follow_css("a.next", "href");
 
 // Also works on HtmlElement for nested selections
 for item in response.select_or_empty(".item") {
@@ -183,7 +197,8 @@ for item in response.select_or_empty(".item") {
 }
 ```
 
-All these methods work with CSS selectors and XPath (use `xpath_or_empty()`, `xpath_first_or_none()`, etc.).
+All these methods work with CSS selectors and XPath (use `xpath_or_empty()`,
+`xpath_first_or_none()`, etc.).
 
 ## Configuration
 
@@ -196,6 +211,7 @@ use silkworm::RunConfig;
 let config = RunConfig::new()
     .with_concurrency(32)
     .with_max_pending_requests(500)
+    .with_log_stats_interval(Duration::from_secs(10))
     .with_request_timeout(Duration::from_secs(10))
     .with_html_max_size_bytes(2_000_000)
     .with_keep_alive(true);
@@ -217,6 +233,16 @@ Fetch HTML directly and parse with `scraper`:
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
     let (text, document) = silkworm::fetch_html("https://example.com").await?;
+    Ok(())
+}
+```
+
+If you only need a parsed document:
+
+```rust
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
+    let document = silkworm::fetch_document("https://example.com").await?;
     Ok(())
 }
 ```
