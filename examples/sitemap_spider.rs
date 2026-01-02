@@ -1,3 +1,4 @@
+use clap::Parser;
 use regex::Regex;
 use serde::Serialize;
 use std::sync::Arc;
@@ -10,6 +11,24 @@ struct SitemapSpider {
     sitemap_url: String,
     max_pages: Option<usize>,
     pages_seen: AtomicUsize,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "sitemap_spider",
+    about = "Crawl a sitemap and collect metadata"
+)]
+struct Args {
+    #[arg(long = "sitemap-url", value_name = "URL")]
+    sitemap_url: String,
+    #[arg(long, value_name = "PATH", default_value = "data/sitemap_meta.jl")]
+    output: String,
+    #[arg(long, value_name = "N")]
+    pages: Option<usize>,
+    #[arg(long, value_name = "N", default_value_t = 16)]
+    concurrency: usize,
+    #[arg(long, value_name = "SECONDS", default_value_t = 0.0)]
+    delay: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,9 +141,7 @@ impl Spider for SitemapSpider {
         "sitemap_metadata"
     }
 
-    fn start_requests(
-        &self,
-    ) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
+    fn start_requests(&self) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
         async move {
             vec![
                 Request::get(self.sitemap_url.clone())
@@ -205,62 +222,14 @@ fn extract_sitemap_urls(body: &str) -> Vec<String> {
         .collect()
 }
 
-fn parse_args() -> Result<(String, Option<usize>, String, usize, f64), String> {
-    let mut sitemap_url: Option<String> = None;
-    let mut output = "data/sitemap_meta.jl".to_string();
-    let mut pages: Option<usize> = None;
-    let mut concurrency = 16usize;
-    let mut delay = 0f64;
-
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--sitemap-url" => {
-                sitemap_url = args.next();
-            }
-            "--output" => {
-                if let Some(value) = args.next() {
-                    output = value;
-                }
-            }
-            "--pages" => {
-                if let Some(value) = args.next() {
-                    pages = value.parse::<usize>().ok();
-                }
-            }
-            "--concurrency" => {
-                if let Some(value) = args.next() {
-                    concurrency = value.parse::<usize>().unwrap_or(concurrency);
-                }
-            }
-            "--delay" => {
-                if let Some(value) = args.next() {
-                    delay = value.parse::<f64>().unwrap_or(delay);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let Some(sitemap_url) = sitemap_url else {
-        return Err("Missing --sitemap-url argument".to_string());
-    };
-
-    Ok((sitemap_url, pages, output, concurrency, delay))
-}
-
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    let (sitemap_url, pages, output, concurrency, delay) = match parse_args() {
-        Ok(values) => values,
-        Err(err) => {
-            eprintln!("{err}");
-            eprintln!(
-                "Usage: cargo run --example sitemap_spider -- --sitemap-url <url> [--output <path>] [--pages <n>] [--concurrency <n>] [--delay <seconds>]"
-            );
-            std::process::exit(1);
-        }
-    };
+    let args = Args::parse();
+    let sitemap_url = args.sitemap_url;
+    let pages = args.pages;
+    let output = args.output;
+    let concurrency = args.concurrency;
+    let delay = args.delay;
 
     let mut request_middlewares: Vec<Arc<dyn RequestMiddleware<SitemapSpider>>> =
         vec![Arc::new(UserAgentMiddleware::new(vec![], None))];

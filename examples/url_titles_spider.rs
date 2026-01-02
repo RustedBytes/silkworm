@@ -1,3 +1,4 @@
+use clap::Parser;
 use serde_json::{Map, Number, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -9,6 +10,18 @@ use silkworm::{crawl_with, prelude::*};
 
 struct UrlTitlesSpider {
     urls_path: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "url_titles_spider",
+    about = "Crawl URLs from a JSON Lines file and extract page titles"
+)]
+struct Args {
+    #[arg(long = "urls-file", value_name = "PATH")]
+    urls_file: PathBuf,
+    #[arg(long, value_name = "PATH", default_value = "data/url_titles.jl")]
+    output: PathBuf,
 }
 
 impl UrlTitlesSpider {
@@ -111,9 +124,7 @@ impl Spider for UrlTitlesSpider {
         "url_titles_from_file"
     }
 
-    fn start_requests(
-        &self,
-    ) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
+    fn start_requests(&self) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
         async move {
             let records = self.load_records();
             let mut out = Vec::new();
@@ -159,46 +170,11 @@ impl Spider for UrlTitlesSpider {
     }
 }
 
-fn parse_args() -> Result<(PathBuf, PathBuf), String> {
-    let mut urls_file: Option<PathBuf> = None;
-    let mut output = PathBuf::from("data/url_titles.jl");
-
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--urls-file" => {
-                if let Some(value) = args.next() {
-                    urls_file = Some(PathBuf::from(value));
-                }
-            }
-            "--output" => {
-                if let Some(value) = args.next() {
-                    output = PathBuf::from(value);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let Some(urls_file) = urls_file else {
-        return Err("Missing --urls-file argument".to_string());
-    };
-
-    Ok((urls_file, output))
-}
-
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    let (urls_file, output) = match parse_args() {
-        Ok(values) => values,
-        Err(err) => {
-            eprintln!("{err}");
-            eprintln!(
-                "Usage: cargo run --example url_titles_spider -- --urls-file <path> [--output <path>]"
-            );
-            std::process::exit(1);
-        }
-    };
+    let args = Args::parse();
+    let urls_file = args.urls_file;
+    let output = args.output;
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<UrlTitlesSpider>>> =
         vec![Arc::new(UserAgentMiddleware::new(vec![], None))];

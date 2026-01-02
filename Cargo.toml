@@ -33,6 +33,9 @@ url = "2.5"
 thiserror = "1.0"
 fasttime = "0.2"
 
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -1,3 +1,4 @@
+use clap::Parser;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,6 +9,16 @@ use silkworm::{crawl_with, prelude::*};
 struct HackerNewsSpider {
     max_pages: usize,
     pages_seen: AtomicUsize,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "hackernews_spider",
+    about = "Crawl the newest Hacker News pages"
+)]
+struct Args {
+    #[arg(long, value_name = "N", default_value_t = 5)]
+    pages: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,27 +141,9 @@ fn extract_number(text: &str) -> Option<u64> {
     }
 }
 
-fn parse_pages_arg() -> usize {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--pages" {
-            if let Some(value) = args.next() {
-                if let Ok(parsed) = value.parse::<usize>() {
-                    return parsed.max(1);
-                }
-            }
-        } else if let Some(value) = arg.strip_prefix("--pages=") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                return parsed.max(1);
-            }
-        }
-    }
-    5
-}
-
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    let pages = parse_pages_arg();
+    let pages = Args::parse().pages.max(1);
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<HackerNewsSpider>>> = vec![
         Arc::new(UserAgentMiddleware::new(vec![], None)),

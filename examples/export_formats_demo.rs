@@ -1,3 +1,4 @@
+use clap::Parser;
 use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -7,6 +8,16 @@ use silkworm::{crawl_with, prelude::*};
 struct ExportFormatsSpider {
     max_pages: usize,
     pages_scraped: AtomicUsize,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "export_formats_demo",
+    about = "Export quotes in multiple formats"
+)]
+struct Args {
+    #[arg(long, value_name = "N", default_value_t = 2)]
+    pages: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,27 +84,9 @@ impl Spider for ExportFormatsSpider {
     }
 }
 
-fn parse_pages_arg() -> usize {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--pages" {
-            if let Some(value) = args.next() {
-                if let Ok(parsed) = value.parse::<usize>() {
-                    return parsed.max(1);
-                }
-            }
-        } else if let Some(value) = arg.strip_prefix("--pages=") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                return parsed.max(1);
-            }
-        }
-    }
-    2
-}
-
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    let max_pages = parse_pages_arg();
+    let max_pages = Args::parse().pages.max(1);
 
     let config = RunConfig::new()
         .with_request_middleware(UserAgentMiddleware::new(vec![], None))
