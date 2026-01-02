@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use silkworm::{Logger, get_logger, prelude::*, run_spider};
+use silkworm::{Logger, crawl, get_logger, prelude::*};
 
 struct LoggingSpider {
     logger: Logger,
@@ -50,7 +50,8 @@ impl Spider for LoggingSpider {
     }
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let spider = LoggingSpider::new();
-    run_spider(spider)
+    crawl(spider).await
 }

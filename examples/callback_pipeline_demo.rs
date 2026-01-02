@@ -3,7 +3,7 @@ use serde_json::{Number, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
-use silkworm::{Item, SilkwormResult, prelude::*, run_spider_with};
+use silkworm::{Item, SilkwormResult, crawl_with, prelude::*};
 
 struct QuotesSpider;
 
@@ -109,7 +109,8 @@ fn enrich_item(mut item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item
     Ok(item)
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let config = RunConfig::new()
         .with_concurrency(4)
         .with_request_middleware(UserAgentMiddleware::new(vec![], None))
@@ -117,5 +118,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         .with_item_pipeline(CallbackPipeline::new(validate_item))
         .with_item_pipeline(CallbackPipeline::from_sync(enrich_item))
         .with_request_timeout(Duration::from_secs(10));
-    run_spider_with(QuotesSpider, config)
+    crawl_with(QuotesSpider, config).await
 }

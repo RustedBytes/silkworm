@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{Response, prelude::*, run_spider_with};
+use silkworm::{Response, crawl_with, prelude::*};
 
 struct SitemapSpider {
     sitemap_url: String,
@@ -245,7 +245,8 @@ fn parse_args() -> Result<(String, Option<usize>, String, usize, f64), String> {
     Ok((sitemap_url, pages, output, concurrency, delay))
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let (sitemap_url, pages, output, concurrency, delay) = match parse_args() {
         Ok(values) => values,
         Err(err) => {
@@ -280,5 +281,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         .with_log_stats_interval(Duration::from_secs(10))
         .with_html_max_size_bytes(2_000_000);
 
-    run_spider_with(SitemapSpider::new(sitemap_url, pages), config)
+    crawl_with(SitemapSpider::new(sitemap_url, pages), config).await
 }

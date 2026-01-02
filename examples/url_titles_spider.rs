@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use silkworm::{prelude::*, run_spider_with};
+use silkworm::{crawl_with, prelude::*};
 
 struct UrlTitlesSpider {
     urls_path: PathBuf,
@@ -183,7 +183,8 @@ fn parse_args() -> Result<(PathBuf, PathBuf), String> {
     Ok((urls_file, output))
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let (urls_file, output) = match parse_args() {
         Ok(values) => values,
         Err(err) => {
@@ -211,5 +212,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         .with_html_max_size_bytes(1_000_000)
         .with_keep_alive(true);
 
-    run_spider_with(UrlTitlesSpider::new(urls_file), config)
+    crawl_with(UrlTitlesSpider::new(urls_file), config).await
 }

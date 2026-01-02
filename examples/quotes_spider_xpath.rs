@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use silkworm::{prelude::*, run_spider};
+use silkworm::{crawl, prelude::*};
 
 struct QuotesSpider;
 
@@ -51,6 +51,7 @@ impl Spider for QuotesSpider {
     }
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
-    run_spider(QuotesSpider)
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
+    crawl(QuotesSpider).await
 }

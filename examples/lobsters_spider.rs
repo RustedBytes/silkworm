@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{prelude::*, run_spider_with};
+use silkworm::{crawl_with, prelude::*};
 
 struct LobstersSpider {
     max_pages: usize,
@@ -147,7 +147,8 @@ fn parse_pages_arg() -> usize {
     1
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let pages = parse_pages_arg();
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<LobstersSpider>>> = vec![
@@ -170,5 +171,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         .with_request_timeout(Duration::from_secs(10))
         .with_log_stats_interval(Duration::from_secs(10));
 
-    run_spider_with(LobstersSpider::new(pages), config)
+    crawl_with(LobstersSpider::new(pages), config).await
 }

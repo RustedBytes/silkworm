@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{prelude::*, run_spider_with};
+use silkworm::{crawl_with, prelude::*};
 
 struct ExportFormatsSpider {
     max_pages: usize,
@@ -96,7 +96,8 @@ fn parse_pages_arg() -> usize {
     2
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let max_pages = parse_pages_arg();
 
     let config = RunConfig::new()
@@ -114,5 +115,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         ))
         .with_request_timeout(Duration::from_secs(10));
 
-    run_spider_with(ExportFormatsSpider::new(max_pages), config)
+    crawl_with(ExportFormatsSpider::new(max_pages), config).await
 }

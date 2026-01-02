@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::time::Duration;
 
-use silkworm::{prelude::*, run_spider_with};
+use silkworm::{crawl_with, prelude::*};
 
 /// Demonstrates the new ergonomic API for selecting elements.
 /// Compare this with the original quotes_spider.rs to see the improvements.
@@ -57,7 +57,8 @@ impl Spider for QuotesSpider {
     }
 }
 
-fn main() -> silkworm::SilkwormResult<()> {
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
     let config = RunConfig::new()
         .with_request_middleware(UserAgentMiddleware::new(
             vec![],
@@ -67,5 +68,5 @@ fn main() -> silkworm::SilkwormResult<()> {
         .with_item_pipeline(JsonLinesPipeline::new("data/quotes_ergonomic.jl"))
         .with_request_timeout(Duration::from_secs(10))
         .with_log_stats_interval(Duration::from_secs(10));
-    run_spider_with(QuotesSpider, config)
+    crawl_with(QuotesSpider, config).await
 }
