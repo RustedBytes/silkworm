@@ -27,9 +27,6 @@ url = "2.5"
 thiserror = "1.0"
 fasttime = "0.2"
 
-[dev-dependencies]
-# Add test dependencies here if needed
-
 [profile.release]
 opt-level = 3
 lto = "fat"
