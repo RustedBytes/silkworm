@@ -78,7 +78,11 @@ async fn validate_item(item: Item, _spider: Arc<QuotesSpider>) -> SilkwormResult
     let text = item_into::<QuoteItem>(item.clone())
         .ok()
         .map(|quote| quote.text)
-        .or_else(|| item.get("text").and_then(|value| value.as_str()).map(str::to_string));
+        .or_else(|| {
+            item.get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        });
 
     if let Some(text) = text {
         if text.trim().len() < 10 {

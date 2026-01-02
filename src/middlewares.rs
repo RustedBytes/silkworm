@@ -382,7 +382,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
         window
             .iter()
             .zip(needle.iter())
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
 }
 
@@ -392,11 +392,11 @@ mod tests {
         DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
         RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
     };
-    use bytes::Bytes;
     use crate::request::{Request, SpiderResult};
     use crate::response::{HtmlResponse, Response};
     use crate::spider::Spider;
     use crate::types::Headers;
+    use bytes::Bytes;
     use std::sync::Arc;
 
     struct TestSpider;

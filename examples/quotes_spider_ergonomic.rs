@@ -31,7 +31,7 @@ impl Spider for QuotesSpider {
             // text_from() extracts text directly, returns empty string if not found
             let text = quote.text_from(".text");
             let author = quote.text_from(".author");
-            
+
             // Skip empty quotes
             if text.is_empty() || author.is_empty() {
                 continue;

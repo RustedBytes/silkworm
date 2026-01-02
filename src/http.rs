@@ -219,10 +219,10 @@ impl HttpClient {
     }
 
     fn build_client_with_proxy(&self, proxy_url: &str) -> SilkwormResult<wreq::Client> {
-        if let Ok(guard) = self.proxy_clients.lock() {
-            if let Some(client) = guard.get(proxy_url) {
-                return Ok(client.clone());
-            }
+        if let Ok(guard) = self.proxy_clients.lock()
+            && let Some(client) = guard.get(proxy_url)
+        {
+            return Ok(client.clone());
         }
         let proxy = wreq::Proxy::all(proxy_url)
             .map_err(|err| SilkwormError::Http(format!("Invalid proxy {}: {}", proxy_url, err)))?;
@@ -231,7 +231,9 @@ impl HttpClient {
             .proxy(proxy)
             .build()?;
         if let Ok(mut guard) = self.proxy_clients.lock() {
-            guard.entry(proxy_url.to_string()).or_insert_with(|| client.clone());
+            guard
+                .entry(proxy_url.to_string())
+                .or_insert_with(|| client.clone());
         }
         Ok(client)
     }

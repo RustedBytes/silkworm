@@ -69,16 +69,14 @@ impl Spider for HackerNewsSpider {
                 .and_then(|el| extract_number(&el.text()));
 
             let comments = subtext.as_ref().and_then(|el| {
-                el.select_or_empty("a")
-                    .into_iter()
-                    .find_map(|link| {
-                        let text = link.text().to_lowercase();
-                        if text.contains("comment") {
-                            extract_number(&text)
-                        } else {
-                            None
-                        }
-                    })
+                el.select_or_empty("a").into_iter().find_map(|link| {
+                    let text = link.text().to_lowercase();
+                    if text.contains("comment") {
+                        extract_number(&text)
+                    } else {
+                        None
+                    }
+                })
             });
 
             let author = subtext
@@ -113,12 +111,7 @@ impl Spider for HackerNewsSpider {
                 .into_iter()
                 .filter_map(|link| link.attr("href"))
                 .collect::<Vec<_>>();
-            out.extend(
-                response
-                    .follow_urls(next_links)
-                    .into_iter()
-                    .map(Into::into),
-            );
+            out.extend(response.follow_urls(next_links).into_iter().map(Into::into));
         }
 
         out
@@ -163,8 +156,9 @@ async fn main() -> silkworm::SilkwormResult<()> {
         Arc::new(UserAgentMiddleware::new(vec![], None)),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
-    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<HackerNewsSpider>>> =
-        vec![Arc::new(RetryMiddleware::new(3, None, Some(vec![403]), 0.5))];
+    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<HackerNewsSpider>>> = vec![Arc::new(
+        RetryMiddleware::new(3, None, Some(vec![403]), 0.5),
+    )];
 
     let config = RunConfig::new()
         .with_middlewares(request_middlewares, response_middlewares)

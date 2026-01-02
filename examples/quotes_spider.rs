@@ -51,12 +51,7 @@ impl Spider for QuotesSpider {
             .into_iter()
             .filter_map(|link| link.attr("href"))
             .collect::<Vec<_>>();
-        out.extend(
-            response
-                .follow_urls(next_links)
-                .into_iter()
-                .map(Into::into),
-        );
+        out.extend(response.follow_urls(next_links).into_iter().map(Into::into));
 
         out
     }

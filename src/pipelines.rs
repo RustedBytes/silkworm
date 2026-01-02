@@ -132,9 +132,10 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
         let line = serde_json::to_string(&item)
             .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
         let mut guard = self.state.lock().await;
-        let file = guard.file.as_mut().ok_or_else(|| {
-            SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string())
-        })?;
+        let file = guard
+            .file
+            .as_mut()
+            .ok_or_else(|| SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string()))?;
         file.write_all(line.as_bytes()).await?;
         file.write_all(b"\n").await?;
         Ok(item)

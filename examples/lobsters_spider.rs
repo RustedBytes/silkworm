@@ -63,9 +63,7 @@ impl Spider for LobstersSpider {
                 .map(|value| response.url_join(value))
                 .unwrap_or_default();
 
-            let domain = story
-                .select_first_or_none("a.domain")
-                .map(|el| el.text());
+            let domain = story.select_first_or_none("a.domain").map(|el| el.text());
 
             let tags = story
                 .select_or_empty("span.tags a.tag")
@@ -111,12 +109,7 @@ impl Spider for LobstersSpider {
                 .into_iter()
                 .filter_map(|link| link.attr("href"))
                 .collect::<Vec<_>>();
-            out.extend(
-                response
-                    .follow_urls(next_links)
-                    .into_iter()
-                    .map(Into::into),
-            );
+            out.extend(response.follow_urls(next_links).into_iter().map(Into::into));
         }
 
         out
@@ -155,14 +148,9 @@ async fn main() -> silkworm::SilkwormResult<()> {
         Arc::new(UserAgentMiddleware::new(vec![], None)),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
-    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<LobstersSpider>>> = vec![
-        Arc::new(RetryMiddleware::new(
-            15,
-            None,
-            Some(vec![403, 429]),
-            0.5,
-        )),
-    ];
+    let response_middlewares: Vec<Arc<dyn ResponseMiddleware<LobstersSpider>>> = vec![Arc::new(
+        RetryMiddleware::new(15, None, Some(vec![403, 429]), 0.5),
+    )];
 
     let config = RunConfig::new()
         .with_concurrency(32)

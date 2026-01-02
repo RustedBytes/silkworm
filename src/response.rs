@@ -112,7 +112,10 @@ impl<S> Response<S> {
         I: IntoIterator<Item = H>,
         H: AsRef<str>,
     {
-        self.follow_urls(hrefs).into_iter().map(Into::into).collect()
+        self.follow_urls(hrefs)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     pub fn follow_all<I, H>(&self, hrefs: I, callback: Option<Callback<S>>) -> Vec<Request<S>>
@@ -291,11 +294,7 @@ impl<S> HtmlResponse<S> {
     }
 
     #[cfg(feature = "scraper-atomic")]
-    fn select_attrs_with(
-        &self,
-        selector: &scraper::Selector,
-        attr_name: &str,
-    ) -> Vec<String> {
+    fn select_attrs_with(&self, selector: &scraper::Selector, attr_name: &str) -> Vec<String> {
         let doc = self.document();
         doc.select(selector)
             .filter_map(|element| element.value().attr(attr_name).map(str::to_string))
@@ -303,11 +302,7 @@ impl<S> HtmlResponse<S> {
     }
 
     #[cfg(not(feature = "scraper-atomic"))]
-    fn select_attrs_with(
-        &self,
-        selector: &scraper::Selector,
-        attr_name: &str,
-    ) -> Vec<String> {
+    fn select_attrs_with(&self, selector: &scraper::Selector, attr_name: &str) -> Vec<String> {
         let doc = scraper::Html::parse_document(self.html_source());
         doc.select(selector)
             .filter_map(|element| element.value().attr(attr_name).map(str::to_string))
@@ -488,10 +483,10 @@ impl HtmlElement {
 
     pub fn text(&self) -> String {
         let doc = scraper::Html::parse_fragment(&self.html);
-        if let Some(selector) = select_all_selector() {
-            if let Some(element) = doc.select(selector).next() {
-                return element.text().collect::<String>();
-            }
+        if let Some(selector) = select_all_selector()
+            && let Some(element) = doc.select(selector).next()
+        {
+            return element.text().collect::<String>();
         }
         self.html.clone()
     }
@@ -837,8 +832,8 @@ fn decode_with_label(body: &[u8], label: &str) -> Option<(String, String)> {
 fn encoding_from_headers(headers: &Headers) -> Option<String> {
     let content_type = headers.get("content-type")?;
     static CHARSET_RE: OnceLock<Regex> = OnceLock::new();
-    let re = CHARSET_RE
-        .get_or_init(|| Regex::new(r#"(?i)charset=([^"'\s;]+)"#).expect("charset regex"));
+    let re =
+        CHARSET_RE.get_or_init(|| Regex::new(r#"(?i)charset=([^"'\s;]+)"#).expect("charset regex"));
     let caps = re.captures(content_type)?;
     caps.get(1).map(|m| m.as_str().to_string())
 }
@@ -909,16 +904,16 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
         window
             .iter()
             .zip(needle.iter())
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::Response;
-    use bytes::Bytes;
     use crate::request::{Request, SpiderOutput, SpiderResult, callback_from_fn};
     use crate::types::Headers;
+    use bytes::Bytes;
     use std::sync::Arc;
 
     #[test]
@@ -953,10 +948,7 @@ mod tests {
 
     #[test]
     fn follow_url_preserves_callback() {
-        async fn handler(
-            _spider: Arc<()>,
-            _response: Response<()>,
-        ) -> SpiderResult<()> {
+        async fn handler(_spider: Arc<()>, _response: Response<()>) -> SpiderResult<()> {
             Vec::new()
         }
 
@@ -1076,11 +1068,11 @@ mod tests {
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
-        
+
         // Invalid selector returns empty
         let results = html.select_or_empty("div[invalid");
         assert_eq!(results.len(), 0);
-        
+
         // Valid selector works
         let results = html.select_or_empty(".test");
         assert_eq!(results.len(), 1);
@@ -1098,10 +1090,10 @@ mod tests {
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
-        
+
         // Invalid selector returns None
         assert!(html.select_first_or_none("div[invalid").is_none());
-        
+
         // Valid selector works
         let element = html.select_first_or_none(".test");
         assert!(element.is_some());
@@ -1119,7 +1111,7 @@ mod tests {
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
-        
+
         assert_eq!(html.text_from("h1"), "Title");
         assert_eq!(html.text_from(".content"), "Text");
         assert_eq!(html.text_from(".missing"), "");
@@ -1136,7 +1128,7 @@ mod tests {
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
-        
+
         assert_eq!(html.attr_from("a", "href"), Some("/link".to_string()));
         assert_eq!(html.attr_from("a", "class"), Some("test".to_string()));
         assert_eq!(html.attr_from("a", "missing"), None);
@@ -1235,10 +1227,10 @@ mod tests {
         };
         let html = response.into_html(1024);
         let parent = html.select_first_or_none(".parent").unwrap();
-        
+
         // Invalid selector returns empty
         assert_eq!(parent.select_or_empty("span[invalid").len(), 0);
-        
+
         // Valid selector works
         let children = parent.select_or_empty(".child");
         assert_eq!(children.len(), 1);

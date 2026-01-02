@@ -149,8 +149,7 @@ impl<S> Request<S> {
     }
 
     pub fn with_meta_str(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.meta
-            .insert(key.into(), Item::String(value.into()));
+        self.meta.insert(key.into(), Item::String(value.into()));
         self
     }
 
@@ -167,8 +166,7 @@ impl<S> Request<S> {
     where
         N: Into<Number>,
     {
-        self.meta
-            .insert(key.into(), Item::Number(value.into()));
+        self.meta.insert(key.into(), Item::Number(value.into()));
         self
     }
 
@@ -275,10 +273,9 @@ impl<S> RequestBuilder<S> {
     }
 
     pub fn allow_non_html(mut self, allow_non_html: bool) -> Self {
-        self.request.meta.insert(
-            "allow_non_html".to_string(),
-            Item::Bool(allow_non_html),
-        );
+        self.request
+            .meta
+            .insert("allow_non_html".to_string(), Item::Bool(allow_non_html));
         self
     }
 
@@ -330,9 +327,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Request, SpiderOutput, callback_from, callback_from_fn};
-    use bytes::Bytes;
     use crate::response::Response;
     use crate::types::{Headers, Item};
+    use bytes::Bytes;
     use std::sync::Arc;
 
     struct TestSpider;
@@ -431,9 +428,9 @@ mod tests {
     #[tokio::test]
     async fn request_builder_callback_sets_closure() {
         let req = Request::<TestSpider>::builder("https://example.com")
-            .callback_fn(|_spider: Arc<TestSpider>, _response: Response<TestSpider>| async {
-                Vec::new()
-            })
+            .callback_fn(
+                |_spider: Arc<TestSpider>, _response: Response<TestSpider>| async { Vec::new() },
+            )
             .build();
 
         assert!(req.callback.is_some());
@@ -465,10 +462,12 @@ mod tests {
     #[tokio::test]
     async fn callback_from_accepts_closure() {
         let suffix = "ok".to_string();
-        let callback = callback_from(move |_spider: Arc<TestSpider>, _response: Response<TestSpider>| {
-            let suffix = suffix.clone();
-            async move { vec![Item::from(suffix).into()] }
-        });
+        let callback = callback_from(
+            move |_spider: Arc<TestSpider>, _response: Response<TestSpider>| {
+                let suffix = suffix.clone();
+                async move { vec![Item::from(suffix).into()] }
+            },
+        );
 
         let request = Request::<TestSpider>::new("https://example.com");
         let response = Response {
