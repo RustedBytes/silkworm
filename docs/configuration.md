@@ -1,0 +1,68 @@
+# Configuration and Runtime
+
+Silkworm exposes `RunConfig` as the primary configuration surface for crawls.
+`RunConfig` is converted into `EngineConfig` internally.
+
+## RunConfig
+
+Key settings:
+- `concurrency`: number of worker tasks and HTTP concurrency.
+- `request_timeout`: per-request timeout override.
+- `log_stats_interval`: optional periodic stats logging.
+- `max_pending_requests`: size of the request queue.
+- `html_max_size_bytes`: maximum HTML bytes to parse into HtmlResponse.
+- `keep_alive`: adds `Connection: keep-alive` header when missing.
+- `request_middlewares`, `response_middlewares`, `item_pipelines`.
+
+Code:
+- RunConfig: `../src/runner.rs`
+
+```rust
+use std::time::Duration;
+use silkworm::{DelayMiddleware, JsonLinesPipeline, RunConfig, UserAgentMiddleware};
+
+let config = RunConfig::new()
+    .with_concurrency(32)
+    .with_request_timeout(Duration::from_secs(10))
+    .with_request_middleware(UserAgentMiddleware::new(vec![], None))
+    .with_request_middleware(DelayMiddleware::fixed(0.2))
+    .with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
+```
+
+## EngineConfig
+
+`EngineConfig` mirrors the fields from `RunConfig` and is used to initialize
+`Engine` and its HTTP client.
+
+Code:
+- EngineConfig: `../src/engine.rs`
+
+## Runtime Entry Points
+
+- `crawl` / `crawl_with`: async APIs that run on an existing Tokio runtime.
+- `run_spider` / `run_spider_with`: synchronous helpers that create a runtime.
+
+Code:
+- Run helpers: `../src/runner.rs`
+
+```rust
+// Async usage
+silkworm::crawl(QuotesSpider).await?;
+
+// Sync usage (spawns its own Tokio runtime)
+silkworm::run_spider(QuotesSpider)?;
+```
+
+## HtmlResponse Limits
+
+`html_max_size_bytes` is applied when converting a `Response` into an
+`HtmlResponse`. If the body exceeds the limit, only the initial slice is
+decoded and parsed.
+
+Code:
+- HtmlResponse creation: `../src/response.rs`
+- Engine response handling: `../src/engine.rs`
+
+```rust
+let config = RunConfig::new().with_html_max_size_bytes(2_000_000);
+```

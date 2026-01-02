@@ -1,0 +1,90 @@
+# Middlewares
+
+Silkworm supports request and response middleware stacks. Each middleware is
+async and can mutate requests, short-circuit responses, or inject retries.
+
+## Middleware Traits
+
+- `RequestMiddleware`: transforms an outgoing request before it is fetched.
+- `ResponseMiddleware`: transforms a response or returns a new request.
+
+Code:
+- Middleware traits and actions: `../src/middlewares.rs`
+
+```rust
+struct TraceMiddleware;
+
+#[async_trait::async_trait]
+impl<S: Spider> RequestMiddleware<S> for TraceMiddleware {
+    async fn process_request(&self, mut request: Request<S>, _spider: Arc<S>) -> Request<S> {
+        request.headers.insert("X-Trace".to_string(), "1".to_string());
+        request
+    }
+}
+```
+
+## Built-In Request Middlewares
+
+### UserAgentMiddleware
+
+Assigns a User-Agent header when one is missing. You can pass a list of agents
+for random rotation or a single default value.
+
+Code:
+- `UserAgentMiddleware`: `../src/middlewares.rs`
+
+### ProxyMiddleware
+
+Adds a proxy URL to `request.meta["proxy"]`. The HTTP client uses this value
+to build (and cache) a proxy-configured wreq client.
+
+Code:
+- `ProxyMiddleware`: `../src/middlewares.rs`
+- Proxy-aware client: `../src/http.rs`
+
+### DelayMiddleware
+
+Adds a delay before a request is sent. Strategies include:
+
+- Fixed delay
+- Random range delay
+- Custom per-request function
+
+Code:
+- `DelayMiddleware`: `../src/middlewares.rs`
+
+## Built-In Response Middlewares
+
+### RetryMiddleware
+
+Retries responses based on status codes and exponential backoff.
+
+Behavior details:
+- Uses `request.meta["retry_times"]` to track attempts.
+- Marks retry requests as `dont_filter` to bypass de-duplication.
+- Optionally sleeps before retry for throttling.
+
+Code:
+- `RetryMiddleware`: `../src/middlewares.rs`
+
+### SkipNonHtmlMiddleware
+
+Skips non-HTML responses unless `request.meta["allow_non_html"]` is true.
+It can also drop the body to reduce memory usage and replaces the callback
+with a no-op to avoid extra parsing.
+
+Code:
+- `SkipNonHtmlMiddleware`: `../src/middlewares.rs`
+- HTML sniffing: `../src/response.rs`
+
+```rust
+use silkworm::{
+    DelayMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, UserAgentMiddleware,
+};
+
+let config = RunConfig::new()
+    .with_request_middleware(UserAgentMiddleware::new(vec![], None))
+    .with_request_middleware(DelayMiddleware::fixed(0.25))
+    .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
+    .with_response_middleware(SkipNonHtmlMiddleware::new(None, 1024));
+```
