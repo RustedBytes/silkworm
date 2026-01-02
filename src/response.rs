@@ -4,6 +4,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 
+use bytes::Bytes;
 use encoding_rs::Encoding;
 use regex::Regex;
 use sxd_document::dom::{Attribute, Element};
@@ -20,7 +21,7 @@ pub struct Response<S> {
     pub url: String,
     pub status: u16,
     pub headers: Headers,
-    pub body: Vec<u8>,
+    pub body: Bytes,
     pub request: Request<S>,
 }
 
@@ -38,11 +39,11 @@ impl<S> fmt::Debug for Response<S> {
 
 impl<S> Response<S> {
     pub fn text(&self) -> String {
-        decode_body(&self.body, &self.headers).0
+        decode_body(self.body.as_ref(), &self.headers).0
     }
 
     pub fn encoding(&self) -> String {
-        decode_body(&self.body, &self.headers).1
+        decode_body(self.body.as_ref(), &self.headers).1
     }
 
     pub fn status_ok(&self) -> bool {
@@ -161,7 +162,7 @@ impl<S> Response<S> {
     }
 
     pub fn close(&mut self) {
-        self.body.clear();
+        self.body = Bytes::new();
         self.headers.clear();
     }
 
@@ -273,6 +274,46 @@ impl<S> HtmlResponse<S> {
         })
     }
 
+    #[cfg(feature = "scraper-atomic")]
+    fn select_texts_with(&self, selector: &scraper::Selector) -> Vec<String> {
+        let doc = self.document();
+        doc.select(selector)
+            .map(|element| element.text().collect::<String>())
+            .collect()
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    fn select_texts_with(&self, selector: &scraper::Selector) -> Vec<String> {
+        let doc = scraper::Html::parse_document(self.html_source());
+        doc.select(selector)
+            .map(|element| element.text().collect::<String>())
+            .collect()
+    }
+
+    #[cfg(feature = "scraper-atomic")]
+    fn select_attrs_with(
+        &self,
+        selector: &scraper::Selector,
+        attr_name: &str,
+    ) -> Vec<String> {
+        let doc = self.document();
+        doc.select(selector)
+            .filter_map(|element| element.value().attr(attr_name).map(str::to_string))
+            .collect()
+    }
+
+    #[cfg(not(feature = "scraper-atomic"))]
+    fn select_attrs_with(
+        &self,
+        selector: &scraper::Selector,
+        attr_name: &str,
+    ) -> Vec<String> {
+        let doc = scraper::Html::parse_document(self.html_source());
+        doc.select(selector)
+            .filter_map(|element| element.value().attr(attr_name).map(str::to_string))
+            .collect()
+    }
+
     pub fn css(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         self.select(selector)
     }
@@ -342,18 +383,20 @@ impl<S> HtmlResponse<S> {
 
     /// Select elements matching a CSS selector and return their text.
     pub fn select_texts(&self, selector: &str) -> Vec<String> {
-        self.select_or_empty(selector)
-            .into_iter()
-            .map(|el| el.text())
-            .collect()
+        let selector = match scraper::Selector::parse(selector) {
+            Ok(selector) => selector,
+            Err(_) => return Vec::new(),
+        };
+        self.select_texts_with(&selector)
     }
 
     /// Select elements matching a CSS selector and return the requested attribute values.
     pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
-        self.select_or_empty(selector)
-            .into_iter()
-            .filter_map(|el| el.attr(attr_name))
-            .collect()
+        let selector = match scraper::Selector::parse(selector) {
+            Ok(selector) => selector,
+            Err(_) => return Vec::new(),
+        };
+        self.select_attrs_with(&selector, attr_name)
     }
 
     /// Select the first element matching a CSS selector and return its text.
@@ -514,18 +557,12 @@ impl HtmlElement {
 
     /// Select elements matching a CSS selector and return their text.
     pub fn select_texts(&self, selector: &str) -> Vec<String> {
-        self.select_or_empty(selector)
-            .into_iter()
-            .map(|el| el.text())
-            .collect()
+        Self::select_texts_from_source(&self.html, selector)
     }
 
     /// Select elements matching a CSS selector and return the requested attribute values.
     pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
-        self.select_or_empty(selector)
-            .into_iter()
-            .filter_map(|el| el.attr(attr_name))
-            .collect()
+        Self::select_attrs_from_source(&self.html, selector, attr_name)
     }
 
     fn select_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
@@ -564,6 +601,28 @@ impl HtmlElement {
             html: element.html(),
             attrs: element_attrs(&element),
         })
+    }
+
+    fn select_texts_from_source(source: &str, selector: &str) -> Vec<String> {
+        let selector = match scraper::Selector::parse(selector) {
+            Ok(selector) => selector,
+            Err(_) => return Vec::new(),
+        };
+        let doc = scraper::Html::parse_fragment(source);
+        doc.select(&selector)
+            .map(|element| element.text().collect::<String>())
+            .collect()
+    }
+
+    fn select_attrs_from_source(source: &str, selector: &str, attr_name: &str) -> Vec<String> {
+        let selector = match scraper::Selector::parse(selector) {
+            Ok(selector) => selector,
+            Err(_) => return Vec::new(),
+        };
+        let doc = scraper::Html::parse_fragment(source);
+        doc.select(&selector)
+            .filter_map(|element| element.value().attr(attr_name).map(str::to_string))
+            .collect()
     }
 }
 
@@ -857,6 +916,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Response;
+    use bytes::Bytes;
     use crate::request::{Request, SpiderOutput, SpiderResult, callback_from_fn};
     use crate::types::Headers;
     use std::sync::Arc;
@@ -868,7 +928,7 @@ mod tests {
             url: "https://example.com/path/".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
         assert_eq!(response.url_join("next"), "https://example.com/path/next");
@@ -881,7 +941,7 @@ mod tests {
             url: "https://example.com/base/".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
         let hrefs = vec![Some("/one"), None, Some("two")];
@@ -907,7 +967,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
 
@@ -924,7 +984,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers,
-            body: Vec::new(),
+            body: Bytes::new(),
             request: Request::<()>::new("https://example.com"),
         };
         assert!(response.looks_like_html());
@@ -936,7 +996,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 204,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request: Request::<()>::new("https://example.com"),
         };
         assert!(response.status_ok());
@@ -946,7 +1006,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 302,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request: Request::<()>::new("https://example.com"),
         };
         assert!(redirect.is_redirect());
@@ -961,7 +1021,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers,
-            body: Vec::new(),
+            body: Bytes::new(),
             request: Request::<()>::new("https://example.com"),
         };
         assert_eq!(response.header("content-type"), Some("text/html"));
@@ -978,7 +1038,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers,
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -997,7 +1057,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers,
-            body: b"hi".to_vec(),
+            body: Bytes::from_static(b"hi"),
             request: Request::<()>::new("https://example.com"),
         };
         response.close();
@@ -1012,7 +1072,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -1034,7 +1094,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -1055,7 +1115,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -1072,7 +1132,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -1090,7 +1150,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);
@@ -1115,7 +1175,7 @@ mod tests {
             url: "https://example.com/base/".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com/base/"),
         };
         let html = response.into_html(1024);
@@ -1136,7 +1196,7 @@ mod tests {
             url: "https://example.com/base/".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
         let hrefs = vec!["/one", "", "two", ""];
@@ -1153,7 +1213,7 @@ mod tests {
             url: "https://example.com/base/".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
         let hrefs = vec!["/one", "", "two"];
@@ -1170,7 +1230,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: body.to_vec(),
+            body: Bytes::from_static(body),
             request: Request::<()>::new("https://example.com"),
         };
         let html = response.into_html(1024);

@@ -147,7 +147,7 @@ impl HttpClient {
             }
 
             let body = match response.bytes().await {
-                Ok(bytes) => bytes.to_vec(),
+                Ok(bytes) => bytes,
                 Err(err) => {
                     let msg = format!("Failed to read response body from {}: {}", url, err);
                     return Err(SilkwormError::Http(msg));

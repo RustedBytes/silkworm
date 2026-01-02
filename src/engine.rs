@@ -46,6 +46,39 @@ impl Stats {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn memory_usage_bytes() -> Option<(u64, u64)> {
+    let data = std::fs::read_to_string("/proc/self/status").ok()?;
+    let mut rss_kb = None;
+    let mut vms_kb = None;
+    for line in data.lines() {
+        if line.starts_with("VmRSS:") {
+            rss_kb = parse_kb(line);
+        } else if line.starts_with("VmSize:") {
+            vms_kb = parse_kb(line);
+        }
+        if rss_kb.is_some() && vms_kb.is_some() {
+            break;
+        }
+    }
+    let rss = rss_kb?.saturating_mul(1024);
+    let vms = vms_kb?.saturating_mul(1024);
+    Some((rss, vms))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn memory_usage_bytes() -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn parse_kb(line: &str) -> Option<u64> {
+    let mut iter = line.split_whitespace();
+    let _label = iter.next()?;
+    let value = iter.next()?.parse::<u64>().ok()?;
+    Some(value)
+}
+
 #[derive(Clone)]
 pub struct Engine<S: Spider> {
     state: Arc<EngineState<S>>,
@@ -68,7 +101,7 @@ struct EngineState<S: Spider> {
     http: HttpClient,
     queue_tx: mpsc::Sender<Request<S>>,
     queue_rx: AsyncMutex<mpsc::Receiver<Request<S>>>,
-    seen: AsyncMutex<HashSet<String>>,
+    seen: AsyncMutex<HashSet<Box<str>>>,
     seen_count: AtomicUsize,
     stop: AtomicBool,
     pending: AtomicUsize,
@@ -215,13 +248,13 @@ impl<S: Spider> Engine<S> {
     async fn enqueue(&self, req: Request<S>) -> SilkwormResult<()> {
         if !req.dont_filter {
             let mut seen = self.state.seen.lock().await;
-            if seen.contains(&req.url) {
+            if seen.contains(req.url.as_str()) {
                 self.state
                     .logger
                     .debug("Skipping already seen request", &[("url", req.url.clone())]);
                 return Ok(());
             }
-            seen.insert(req.url.clone());
+            seen.insert(req.url.clone().into_boxed_str());
             self.state.seen_count.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -403,7 +436,7 @@ impl<S: Spider> Engine<S> {
             0.0
         };
 
-        vec![
+        let mut out = vec![
             ("elapsed_seconds", format!("{:.1}", elapsed)),
             ("requests_sent", requests_sent.to_string()),
             ("responses_received", responses_received.to_string()),
@@ -412,7 +445,14 @@ impl<S: Spider> Engine<S> {
             ("pending_requests", pending.to_string()),
             ("requests_per_second", format!("{:.2}", rate)),
             ("seen_requests", seen.to_string()),
-        ]
+        ];
+
+        if let Some((rss_bytes, vms_bytes)) = memory_usage_bytes() {
+            out.push(("memory_rss_bytes", rss_bytes.to_string()));
+            out.push(("memory_vms_bytes", vms_bytes.to_string()));
+        }
+
+        out
     }
 }
 

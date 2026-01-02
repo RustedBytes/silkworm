@@ -14,7 +14,7 @@ pub mod runner;
 pub mod spider;
 pub mod types;
 
-pub use api::fetch_html;
+pub use api::{fetch_document, fetch_html};
 pub use engine::Engine;
 pub use errors::{SilkwormError, SilkwormResult};
 pub use http::HttpClient;

@@ -272,6 +272,7 @@ impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
 pub struct SkipNonHtmlMiddleware {
     allowed_types: Vec<String>,
     sniff_bytes: usize,
+    drop_body_on_skip: bool,
     logger: crate::logging::Logger,
 }
 
@@ -280,8 +281,14 @@ impl SkipNonHtmlMiddleware {
         SkipNonHtmlMiddleware {
             allowed_types: allowed_types.unwrap_or_else(|| vec!["html".to_string()]),
             sniff_bytes,
+            drop_body_on_skip: true,
             logger: get_logger("SkipNonHtmlMiddleware", None),
         }
+    }
+
+    pub fn with_drop_body_on_skip(mut self, drop_body_on_skip: bool) -> Self {
+        self.drop_body_on_skip = drop_body_on_skip;
+        self
     }
 }
 
@@ -322,6 +329,10 @@ impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
             ],
         );
 
+        if self.drop_body_on_skip {
+            response.body = bytes::Bytes::new();
+            response.headers.clear();
+        }
         response.request.callback = Some(noop_callback());
         ResponseAction::Response(response)
     }
@@ -381,6 +392,7 @@ mod tests {
         DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
         RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
     };
+    use bytes::Bytes;
     use crate::request::{Request, SpiderResult};
     use crate::response::{HtmlResponse, Response};
     use crate::spider::Spider;
@@ -407,7 +419,7 @@ mod tests {
             url: request.url.clone(),
             status,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         }
     }

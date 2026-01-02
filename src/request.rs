@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use serde_json::Number;
 
 use crate::response::Response;
@@ -17,7 +18,7 @@ pub struct Request<S> {
     pub method: String,
     pub headers: Headers,
     pub params: Params,
-    pub data: Option<Vec<u8>>,
+    pub data: Option<Bytes>,
     pub json: Option<Item>,
     pub meta: Meta,
     pub timeout: Option<Duration>,
@@ -132,8 +133,8 @@ impl<S> Request<S> {
         self
     }
 
-    pub fn with_data(mut self, data: Vec<u8>) -> Self {
-        self.data = Some(data);
+    pub fn with_data(mut self, data: impl Into<Bytes>) -> Self {
+        self.data = Some(data.into());
         self
     }
 
@@ -248,8 +249,8 @@ impl<S> RequestBuilder<S> {
         self
     }
 
-    pub fn data(mut self, data: Vec<u8>) -> Self {
-        self.request.data = Some(data);
+    pub fn data(mut self, data: impl Into<Bytes>) -> Self {
+        self.request.data = Some(data.into());
         self
     }
 
@@ -329,6 +330,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Request, SpiderOutput, callback_from, callback_from_fn};
+    use bytes::Bytes;
     use crate::response::Response;
     use crate::types::{Headers, Item};
     use std::sync::Arc;
@@ -404,7 +406,7 @@ mod tests {
         );
         assert_eq!(req.params.get("q").map(String::as_str), Some("rust"));
         assert_eq!(req.json.as_ref().and_then(|v| v.as_i64()), Some(1));
-        assert_eq!(req.data.as_ref().map(Vec::len), Some(3));
+        assert_eq!(req.data.as_ref().map(Bytes::len), Some(3));
         assert_eq!(
             req.meta
                 .get("allow_non_html")
@@ -452,7 +454,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
 
@@ -473,7 +475,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
 
@@ -494,7 +496,7 @@ mod tests {
             url: "https://example.com".to_string(),
             status: 200,
             headers: Headers::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
             request,
         };
 

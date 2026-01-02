@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use crate::errors::{SilkwormError, SilkwormResult};
 
-pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
+async fn fetch_text(url: &str) -> SilkwormResult<String> {
     static CLIENT: OnceLock<wreq::Client> = OnceLock::new();
     let client = if let Some(client) = CLIENT.get() {
         client.clone()
@@ -23,8 +23,18 @@ pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
         .text()
         .await
         .map_err(|err| SilkwormError::Http(err.to_string()))?;
+    Ok(text)
+}
+
+pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
+    let text = fetch_text(url).await?;
     let document = scraper::Html::parse_document(&text);
     Ok((text, document))
+}
+
+pub async fn fetch_document(url: &str) -> SilkwormResult<scraper::Html> {
+    let text = fetch_text(url).await?;
+    Ok(scraper::Html::parse_document(&text))
 }
 
 #[cfg(test)]
