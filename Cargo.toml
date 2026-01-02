@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Async-first web scraping framework (Rust port)"
+repository = "https://github.com/RustedBytes/silkworm"
+homepage = "https://github.com/RustedBytes/silkworm"
+documentation = "https://docs.rs/silkworm"
+readme = "README.md"
+keywords = ["web", "scraping", "crawler", "spider", "async"]
+categories = ["web-programming", "web-programming::http-client"]
 
 [lib]
 name = "silkworm"
