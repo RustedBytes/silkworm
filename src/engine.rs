@@ -448,8 +448,9 @@ impl<S: Spider> Engine<S> {
         ];
 
         if let Some((rss_bytes, vms_bytes)) = memory_usage_bytes() {
-            out.push(("memory_rss_bytes", rss_bytes.to_string()));
-            out.push(("memory_vms_bytes", vms_bytes.to_string()));
+            let mb = 1024.0 * 1024.0;
+            out.push(("memory_rss_mb", format!("{:.2}", rss_bytes as f64 / mb)));
+            out.push(("memory_vms_mb", format!("{:.2}", vms_bytes as f64 / mb)));
         }
 
         out
