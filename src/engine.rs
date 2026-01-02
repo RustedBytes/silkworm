@@ -199,6 +199,23 @@ impl<S: Spider> Engine<S> {
                 .logger
                 .error("Failed to open spider", &[("error", err.to_string())]);
             self.shutdown().await;
+
+            while let Some(res) = join_set.join_next().await {
+                if let Err(err) = res {
+                    self.state
+                        .logger
+                        .error("Worker task failed", &[("error", format!("{err}"))]);
+                }
+            }
+
+            self.state.http.close().await;
+            if let Err(close_err) = self.close_spider().await {
+                self.state.logger.error(
+                    "Failed to close spider",
+                    &[("error", close_err.to_string())],
+                );
+            }
+            complete_logs();
             return Err(err);
         }
 
@@ -412,13 +429,17 @@ impl<S: Spider> Engine<S> {
     async fn log_statistics(self, interval: Duration) {
         let mut ticker = tokio::time::interval(interval);
         loop {
-            ticker.tick().await;
-            if self.state.stop.load(Ordering::SeqCst) {
-                break;
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if self.state.stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    self.state
+                        .logger
+                        .info("Crawl statistics", &self.stats_payload());
+                }
+                _ = self.state.stop_notify.notified() => break,
             }
-            self.state
-                .logger
-                .info("Crawl statistics", &self.stats_payload());
         }
     }
 

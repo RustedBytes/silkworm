@@ -9,11 +9,12 @@ request de-duplication.
 
 1. The spider is opened and its start requests are generated.
 2. Requests are queued (with de-duplication unless `dont_filter` is set).
-3. Worker tasks fetch requests through the HTTP client.
-4. Response middlewares can transform the response or return a new request.
-5. The response is parsed via a callback or the spider's `parse` method.
-6. Outputs are turned into new requests or items, then re-queued or piped.
-7. When the queue drains and no requests are pending, the engine shuts down.
+3. Request middlewares can enrich or rewrite requests before they are sent.
+4. Worker tasks fetch requests through the HTTP client.
+5. Response middlewares can transform the response or return a new request.
+6. The response is parsed via a callback or the spider's `parse` method.
+7. Outputs are turned into new requests or items, then re-queued or piped.
+8. When the queue drains and no requests are pending, the engine shuts down.
 
 Implementation entry points:
 - Engine and core loop: `../src/engine.rs`
@@ -84,6 +85,26 @@ if !req.dont_filter {
 Relevant code:
 - De-duplication and enqueue: `../src/engine.rs`
 - Request flag: `../src/request.rs`
+
+## Request Handling
+
+Request middlewares run before a request is sent. They can add headers,
+timeouts, proxies, or meta values. The HTTP client merges default headers
+with request headers and applies a request-specific timeout when set. If
+`keep_alive` is enabled, it injects `Connection: keep-alive` when the header
+is not already present.
+
+```rust
+let req = self.apply_request_middlewares(req).await;
+self.state.requests_sent_increment();
+let resp = self.state.http.fetch(req).await?;
+```
+
+Relevant code:
+- Request middleware chain: `../src/engine.rs`
+- Request middleware traits: `../src/middlewares.rs`
+- HTTP options and headers: `../src/http.rs`
+- Request fields: `../src/request.rs`
 
 ## Response Handling
 
