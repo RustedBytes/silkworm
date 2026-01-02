@@ -9,7 +9,7 @@ pub trait Spider: Send + Sync + 'static {
         "spider"
     }
 
-    fn start_urls(&self) -> Vec<String> {
+    fn start_urls(&self) -> Vec<&str> {
         Vec::new()
     }
 
@@ -53,11 +53,8 @@ mod tests {
             "test"
         }
 
-        fn start_urls(&self) -> Vec<String> {
-            vec![
-                "https://example.com".to_string(),
-                "https://example.com/next".to_string(),
-            ]
+        fn start_urls(&self) -> Vec<&str> {
+            vec!["https://example.com", "https://example.com/next"]
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -69,7 +66,10 @@ mod tests {
     async fn start_requests_defaults_to_start_urls() {
         let spider = TestSpider;
         let requests = spider.start_requests().await;
-        let urls: Vec<String> = requests.into_iter().map(|req| req.url).collect();
+        let urls = requests
+            .iter()
+            .map(|req| req.url.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(
             urls,
             vec!["https://example.com", "https://example.com/next"]

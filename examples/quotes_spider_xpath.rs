@@ -20,8 +20,8 @@ impl Spider for QuotesSpider {
         "quotes_xpath"
     }
 
-    fn start_urls(&self) -> Vec<String> {
-        vec!["https://quotes.toscrape.com/page/1/".to_string()]
+    fn start_urls(&self) -> Vec<&str> {
+        vec!["https://quotes.toscrape.com/page/1/"]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {

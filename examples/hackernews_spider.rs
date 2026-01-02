@@ -47,8 +47,8 @@ impl Spider for HackerNewsSpider {
         "hacker_news_latest"
     }
 
-    fn start_urls(&self) -> Vec<String> {
-        vec!["https://news.ycombinator.com/newest".to_string()]
+    fn start_urls(&self) -> Vec<&str> {
+        vec!["https://news.ycombinator.com/newest"]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {

@@ -46,8 +46,8 @@ impl Spider for LobstersSpider {
         "lobsters_front_page"
     }
 
-    fn start_urls(&self) -> Vec<String> {
-        vec!["https://lobste.rs/".to_string()]
+    fn start_urls(&self) -> Vec<&str> {
+        vec!["https://lobste.rs/"]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
