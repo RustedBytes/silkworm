@@ -1,6 +1,7 @@
 # Silkworm
 
 [![Crates.io Version](https://img.shields.io/crates/v/silkworm-rs)](https://crates.io/crates/silkworm-rs)
+[![Tests](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml/badge.svg)](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml)
 
 Async-first web scraping framework for Rust. Built on `wreq` + `scraper` with
 XPath support via `sxd-xpath`. It keeps the API small
