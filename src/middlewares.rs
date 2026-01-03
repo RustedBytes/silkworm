@@ -68,8 +68,8 @@ impl<S: Spider> RequestMiddleware<S> for UserAgentMiddleware {
                 let ua = if self.user_agents.is_empty() {
                     self.default.clone()
                 } else {
-                    let mut rng = rand::thread_rng();
-                    let idx = rng.gen_range(0..self.user_agents.len());
+                    let mut rng = rand::rng();
+                    let idx = rng.random_range(0..self.user_agents.len());
                     self.user_agents[idx].clone()
                 };
                 request.headers.insert("User-Agent".to_string(), ua.clone());
@@ -121,8 +121,8 @@ impl<S: Spider> RequestMiddleware<S> for ProxyMiddleware {
                 return request;
             }
             let proxy = if self.random_selection {
-                let mut rng = rand::thread_rng();
-                let idx = rng.gen_range(0..self.proxies.len());
+                let mut rng = rand::rng();
+                let idx = rng.random_range(0..self.proxies.len());
                 self.proxies[idx].clone()
             } else {
                 let mut guard = self.index.lock().expect("proxy index lock");
@@ -275,8 +275,8 @@ impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
                     if max_delay <= min_delay {
                         *min_delay
                     } else {
-                        let mut rng = rand::thread_rng();
-                        rng.gen_range(*min_delay..*max_delay)
+                        let mut rng = rand::rng();
+                        rng.random_range(*min_delay..*max_delay)
                     }
                 }
                 DelayStrategy::Custom(func) => func(&request, spider.as_ref()),
