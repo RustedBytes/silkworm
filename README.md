@@ -1,4 +1,4 @@
-# Silkworm (Rust)
+# Silkworm
 
 Async-first web scraping framework for Rust. Built on `wreq` + `scraper` with
 XPath support via `sxd-xpath`. It keeps the API small
@@ -20,7 +20,7 @@ structured logging so you can focus on crawling.
 ## Install
 
 ```bash
-cargo add silkworm
+cargo add silkworm-rs
 ```
 
 If you want to use the async API directly (instead of `run_spider`), add Tokio:
