@@ -111,6 +111,11 @@ pub struct UtilityFetcher {
 }
 
 impl UtilityFetcher {
+    /// Build a utility fetcher from explicit options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the HTTP client configuration is invalid.
     pub fn new(options: UtilityFetchOptions) -> SilkwormResult<Self> {
         let client = if is_default_utility_options(&options) {
             shared_default_client()?
@@ -120,16 +125,31 @@ impl UtilityFetcher {
         Ok(UtilityFetcher { client })
     }
 
+    /// Fetch a URL and decode the response body to text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or response decoding fails.
     pub async fn fetch_text(&self, url: &str) -> SilkwormResult<String> {
         fetch_text_with_client(&self.client, url).await
     }
 
+    /// Fetch a URL and return both decoded text and parsed HTML document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or response decoding fails.
     pub async fn fetch_html(&self, url: &str) -> SilkwormResult<(String, scraper::Html)> {
         let text = self.fetch_text(url).await?;
         let document = scraper::Html::parse_document(&text);
         Ok((text, document))
     }
 
+    /// Fetch a URL and return the parsed HTML document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request fails or response decoding fails.
     pub async fn fetch_document(&self, url: &str) -> SilkwormResult<scraper::Html> {
         let text = self.fetch_text(url).await?;
         Ok(scraper::Html::parse_document(&text))
@@ -181,10 +201,20 @@ async fn fetch_text_with_client(client: &HttpClient, url: &str) -> SilkwormResul
     Ok(response.text())
 }
 
+/// Fetch a URL and return both decoded text and parsed HTML document.
+///
+/// # Errors
+///
+/// Returns an error when the request fails or response decoding fails.
 pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
     fetch_html_with(url, UtilityFetchOptions::default()).await
 }
 
+/// Fetch a URL with custom options and return both decoded text and parsed HTML.
+///
+/// # Errors
+///
+/// Returns an error when the request fails, response decoding fails, or options are invalid.
 pub async fn fetch_html_with(
     url: &str,
     options: UtilityFetchOptions,
@@ -194,10 +224,20 @@ pub async fn fetch_html_with(
     Ok((text, document))
 }
 
+/// Fetch a URL and return the parsed HTML document.
+///
+/// # Errors
+///
+/// Returns an error when the request fails or response decoding fails.
 pub async fn fetch_document(url: &str) -> SilkwormResult<scraper::Html> {
     fetch_document_with(url, UtilityFetchOptions::default()).await
 }
 
+/// Fetch a URL with custom options and return the parsed HTML document.
+///
+/// # Errors
+///
+/// Returns an error when the request fails, response decoding fails, or options are invalid.
 pub async fn fetch_document_with(
     url: &str,
     options: UtilityFetchOptions,

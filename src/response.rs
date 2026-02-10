@@ -81,8 +81,7 @@ impl<S> Response<S> {
         match Url::parse(&self.url) {
             Ok(base) => base
                 .join(href)
-                .map(|u| u.to_string())
-                .unwrap_or_else(|_| href.to_string()),
+                .map_or_else(|_| href.to_string(), |u| u.to_string()),
             Err(_) => href.to_string(),
         }
     }
@@ -159,7 +158,7 @@ impl<S> Response<S> {
     pub fn looks_like_html(&self) -> bool {
         let content_type = self
             .content_type()
-            .map(|value| value.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if content_type.contains("html") {
@@ -232,12 +231,22 @@ impl<S: Clone> Clone for HtmlResponse<S> {
 }
 
 impl<S> HtmlResponse<S> {
+    /// Select elements matching a CSS selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
         Ok(self.select_with(&selector))
     }
 
+    /// Select the first element matching a CSS selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn select_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         let selector = scraper::Selector::parse(selector)
             .map_err(|err| SilkwormError::Selector(format!("Invalid CSS selector: {err}")))?;
@@ -313,15 +322,30 @@ impl<S> HtmlResponse<S> {
     }
 
     #[inline]
+    /// Alias for [`HtmlResponse::select`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn css(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         self.select(selector)
     }
 
     #[inline]
+    /// Alias for [`HtmlResponse::select_first`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn css_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         self.select_first(selector)
     }
 
+    /// Select elements matching an `XPath` selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `XPath` support is disabled or the selector is invalid.
     pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         #[cfg(feature = "xpath")]
         {
@@ -338,16 +362,31 @@ impl<S> HtmlResponse<S> {
         }
     }
 
+    /// Select the first element matching an `XPath` selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `XPath` support is disabled or the selector is invalid.
     pub fn xpath_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         self.xpath(selector).map(|nodes| nodes.into_iter().next())
     }
 
     #[cfg(feature = "xpath")]
+    /// Evaluate a precompiled `XPath` expression against this response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `XPath` evaluation fails.
     pub fn xpath_with(&self, xpath: &sxd_xpath::XPath) -> SilkwormResult<Vec<HtmlElement>> {
         xpath_from_cached_source(self.html_source(), xpath)
     }
 
     #[cfg(feature = "xpath")]
+    /// Evaluate a precompiled `XPath` expression and return the first match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `XPath` evaluation fails.
     pub fn xpath_first_with(
         &self,
         xpath: &sxd_xpath::XPath,
@@ -385,14 +424,14 @@ impl<S> HtmlResponse<S> {
         self.select_first_or_none(selector)
     }
 
-    /// Select elements matching an XPath selector, returning an empty vector on error.
+    /// Select elements matching an `XPath` selector, returning an empty vector on error.
     /// This is a convenience method that ignores selector parsing errors.
     #[inline]
     pub fn xpath_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
         self.xpath(selector).unwrap_or_default()
     }
 
-    /// Select the first element matching an XPath selector, returning None on error.
+    /// Select the first element matching an `XPath` selector, returning None on error.
     /// This is a convenience method that ignores selector parsing errors.
     #[inline]
     pub fn xpath_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
@@ -401,18 +440,16 @@ impl<S> HtmlResponse<S> {
 
     /// Select elements matching a CSS selector and return their text.
     pub fn select_texts(&self, selector: &str) -> Vec<String> {
-        let selector = match scraper::Selector::parse(selector) {
-            Ok(selector) => selector,
-            Err(_) => return Vec::new(),
+        let Ok(selector) = scraper::Selector::parse(selector) else {
+            return Vec::new();
         };
         self.select_texts_with(&selector)
     }
 
     /// Select elements matching a CSS selector and return the requested attribute values.
     pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
-        let selector = match scraper::Selector::parse(selector) {
-            Ok(selector) => selector,
-            Err(_) => return Vec::new(),
+        let Ok(selector) = scraper::Selector::parse(selector) else {
+            return Vec::new();
         };
         self.select_attrs_with(&selector, attr_name)
     }
@@ -559,11 +596,21 @@ impl HtmlElement {
     }
 
     #[inline]
+    /// Select elements matching a CSS selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         Self::select_from_source(&self.html, selector)
     }
 
     #[inline]
+    /// Select the first element matching a CSS selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `selector` is not a valid CSS selector.
     pub fn select_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         Self::select_first_from_source(&self.html, selector)
     }
@@ -656,9 +703,8 @@ impl HtmlElement {
     }
 
     fn select_texts_from_source(source: &str, selector: &str) -> Vec<String> {
-        let selector = match scraper::Selector::parse(selector) {
-            Ok(selector) => selector,
-            Err(_) => return Vec::new(),
+        let Ok(selector) = scraper::Selector::parse(selector) else {
+            return Vec::new();
         };
         let doc = scraper::Html::parse_fragment(source);
         doc.select(&selector)
@@ -667,9 +713,8 @@ impl HtmlElement {
     }
 
     fn select_attrs_from_source(source: &str, selector: &str, attr_name: &str) -> Vec<String> {
-        let selector = match scraper::Selector::parse(selector) {
-            Ok(selector) => selector,
-            Err(_) => return Vec::new(),
+        let Ok(selector) = scraper::Selector::parse(selector) else {
+            return Vec::new();
         };
         let doc = scraper::Html::parse_fragment(source);
         doc.select(&selector)
@@ -802,7 +847,7 @@ fn element_to_html(element: Element<'_>) -> String {
 fn element_attrs(element: &scraper::ElementRef<'_>) -> HashMap<String, String> {
     let raw_attrs = &element.value().attrs;
     let mut attrs = HashMap::with_capacity(raw_attrs.len());
-    for (name, value) in raw_attrs.iter() {
+    for (name, value) in raw_attrs {
         attrs.insert(name.local.to_string(), value.to_string());
     }
     attrs
@@ -1012,8 +1057,8 @@ fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option
 }
 
 fn encoding_from_headers(headers: &Headers) -> Option<String> {
-    let content_type = header_value_case_insensitive(headers, "content-type")?;
     static CHARSET_RE: OnceLock<Regex> = OnceLock::new();
+    let content_type = header_value_case_insensitive(headers, "content-type")?;
     let re =
         CHARSET_RE.get_or_init(|| Regex::new(r#"(?i)charset=([^"'\s;]+)"#).expect("charset regex"));
     let caps = re.captures(content_type)?;
@@ -1021,10 +1066,12 @@ fn encoding_from_headers(headers: &Headers) -> Option<String> {
 }
 
 fn encoding_from_meta(body: &[u8]) -> Option<String> {
+    static META_CHARSET_RE: OnceLock<Regex> = OnceLock::new();
+    static META_CONTENT_TYPE_RE: OnceLock<Regex> = OnceLock::new();
+    static XML_DECL_RE: OnceLock<Regex> = OnceLock::new();
     let head_len = min(4096, body.len());
     let head = String::from_utf8_lossy(&body[..head_len]);
 
-    static META_CHARSET_RE: OnceLock<Regex> = OnceLock::new();
     let meta_charset = META_CHARSET_RE.get_or_init(|| {
         Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)['"]?"#)
             .expect("meta charset regex")
@@ -1033,7 +1080,6 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
         return caps.get(1).map(|m| m.as_str().to_string());
     }
 
-    static META_CONTENT_TYPE_RE: OnceLock<Regex> = OnceLock::new();
     let meta_content_type = META_CONTENT_TYPE_RE.get_or_init(|| {
         Regex::new(
             r#"(?i)<meta\s+http-equiv\s*=\s*['"]?content-type['"]?[^>]*charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)['"]?"#,
@@ -1044,7 +1090,6 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
         return caps.get(1).map(|m| m.as_str().to_string());
     }
 
-    static XML_DECL_RE: OnceLock<Regex> = OnceLock::new();
     let xml_decl = XML_DECL_RE.get_or_init(|| {
         Regex::new(r#"(?i)<\?xml[^>]+encoding\s*=\s*['"]([a-zA-Z0-9._:-]+)['"]"#)
             .expect("xml declaration regex")

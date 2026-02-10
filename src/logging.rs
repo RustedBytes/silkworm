@@ -19,7 +19,6 @@ fn min_level() -> Level {
         let level = env::var("SILKWORM_LOG_LEVEL").unwrap_or_else(|_| "INFO".to_string());
         match level.to_uppercase().as_str() {
             "TRACE" | "DEBUG" => Level::Debug,
-            "INFO" => Level::Info,
             "WARN" | "WARNING" => Level::Warn,
             "ERROR" | "ERR" | "FAIL" | "FATAL" | "CRITICAL" => Level::Error,
             _ => Level::Info,
@@ -34,6 +33,7 @@ pub struct Logger {
 
 impl Logger {
     #[inline]
+    #[must_use]
     pub fn bind(&self, key: &str, value: impl ToString) -> Logger {
         let mut context = self.context.clone();
         context.push((key.to_string(), value.to_string()));
@@ -66,18 +66,24 @@ impl Logger {
             return;
         }
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| {
-                DateTime::from_unix_timestamp(d.as_secs() as i64, d.subsec_nanos() as i32)
-                    .map(|dt| dt.to_string())
-                    .unwrap_or_else(|_| d.as_secs().to_string())
-            })
-            .unwrap_or_else(|_| "0".to_string());
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
+            |_| "0".to_string(),
+            |d| {
+                let secs = i64::try_from(d.as_secs()).ok();
+                let nanos = i32::try_from(d.subsec_nanos()).ok();
+                if let (Some(secs), Some(nanos)) = (secs, nanos) {
+                    DateTime::from_unix_timestamp(secs, nanos)
+                        .map_or_else(|_| d.as_secs().to_string(), |dt| dt.to_string())
+                } else {
+                    d.as_secs().to_string()
+                }
+            },
+        );
 
         let mut parts = Vec::with_capacity(6 + self.context.len() + fields.len());
-        parts.push(format!("ts={}", timestamp));
-        parts.push(format!("level={}", level_label(level)));
+        let level_label = level_label(level);
+        parts.push(format!("ts={timestamp}"));
+        parts.push(format!("level={level_label}"));
         parts.push(format!("msg=\"{}\"", escape(message)));
 
         for (k, v) in &self.context {
@@ -92,6 +98,7 @@ impl Logger {
     }
 }
 
+#[must_use]
 pub fn get_logger(component: &str, spider: Option<&str>) -> Logger {
     let _ = min_level();
     let mut context = Vec::new();

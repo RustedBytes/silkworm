@@ -58,7 +58,7 @@ impl<S> Clone for Request<S> {
 
 impl<S> fmt::Debug for Request<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let data_len = self.data.as_ref().map(|data| data.len());
+        let data_len = self.data.as_ref().map(Bytes::len);
         let has_callback = self.callback.is_some();
         f.debug_struct("Request")
             .field("url", &self.url)
@@ -220,37 +220,39 @@ impl<S> Request<S> {
 
     #[inline]
     pub fn meta_str(&self, key: &str) -> Option<&str> {
-        self.meta.get(key).and_then(|value| value.as_str())
+        self.meta.get(key).and_then(Item::as_str)
     }
 
     #[inline]
     pub fn meta_bool(&self, key: &str) -> Option<bool> {
-        self.meta.get(key).and_then(|value| value.as_bool())
+        self.meta.get(key).and_then(Item::as_bool)
     }
 
     #[inline]
     pub fn meta_u64(&self, key: &str) -> Option<u64> {
-        self.meta.get(key).and_then(|value| value.as_u64())
+        self.meta.get(key).and_then(Item::as_u64)
     }
 
     #[inline]
     pub fn meta_f64(&self, key: &str) -> Option<f64> {
-        self.meta.get(key).and_then(|value| value.as_f64())
+        self.meta.get(key).and_then(Item::as_f64)
     }
 
     #[inline]
     pub fn take_meta_u64(&mut self, key: &str) -> Option<u64> {
-        self.meta.remove(key).and_then(|value| value.as_u64())
+        self.meta.remove(key).and_then(|value| Item::as_u64(&value))
     }
 
     #[inline]
     pub fn take_meta_f64(&mut self, key: &str) -> Option<f64> {
-        self.meta.remove(key).and_then(|value| value.as_f64())
+        self.meta.remove(key).and_then(|value| Item::as_f64(&value))
     }
 
     #[inline]
     pub fn take_meta_bool(&mut self, key: &str) -> Option<bool> {
-        self.meta.remove(key).and_then(|value| value.as_bool())
+        self.meta
+            .remove(key)
+            .and_then(|value| Item::as_bool(&value))
     }
 
     #[inline]

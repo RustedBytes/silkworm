@@ -164,20 +164,41 @@ impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
 }
 
 #[inline]
+/// Run a spider inside the current async runtime with default configuration.
+///
+/// # Errors
+///
+/// Returns an error when engine startup or crawl execution fails.
 pub async fn crawl<S: Spider>(spider: S) -> SilkwormResult<()> {
     crawl_with(spider, RunConfig::default()).await
 }
 
+/// Run a spider inside the current async runtime using a custom configuration.
+///
+/// # Errors
+///
+/// Returns an error when engine startup or crawl execution fails.
 pub async fn crawl_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormResult<()> {
     let engine = Engine::new(spider, config.into())?;
     engine.run().await
 }
 
 #[inline]
+/// Run a spider from synchronous code with default configuration.
+///
+/// # Errors
+///
+/// Returns an error when runtime creation fails or crawl execution fails.
 pub fn run_spider<S: Spider>(spider: S) -> SilkwormResult<()> {
     run_spider_with(spider, RunConfig::default())
 }
 
+/// Run a spider from synchronous code with a custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if called from an existing Tokio runtime, if runtime
+/// creation fails, or if crawl execution fails.
 pub fn run_spider_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormResult<()> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(SilkwormError::Config(

@@ -290,6 +290,12 @@ fn take_request_delay<S>(req: &mut Request<S>) -> Option<Duration> {
 }
 
 impl<S: Spider> Engine<S> {
+    /// Build a new engine with validated runtime configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when configuration is invalid or the HTTP client cannot
+    /// be created.
     pub fn new(spider: S, config: EngineConfig<S>) -> SilkwormResult<Self> {
         let EngineConfig {
             concurrency,
@@ -365,6 +371,12 @@ impl<S: Spider> Engine<S> {
         })
     }
 
+    /// Run the crawl engine until all work is complete or a fatal error occurs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when startup, request processing, worker coordination,
+    /// or shutdown steps fail.
     pub async fn run(&self) -> SilkwormResult<()> {
         self.state.logger.info(
             "Starting engine",
@@ -415,7 +427,7 @@ impl<S: Spider> Engine<S> {
             run_error = Some(err);
         }
 
-        self.shutdown().await;
+        self.shutdown();
         self.shutdown_scheduled_requests().await;
 
         if run_error.is_none() {
@@ -457,7 +469,7 @@ impl<S: Spider> Engine<S> {
                 .info("Final crawl statistics", &self.stats_payload());
         }
 
-        self.state.http.close().await;
+        self.state.http.close();
 
         if let Err(err) = self.close_spider().await
             && run_error.is_none()
@@ -607,7 +619,7 @@ impl<S: Spider> Engine<S> {
                 if self.state.fail_fast {
                     record_fatal_error_state(self.state.as_ref(), err).await;
                     pending_guard.finish();
-                    self.shutdown().await;
+                    self.shutdown();
                     break;
                 }
             }
@@ -932,7 +944,7 @@ impl<S: Spider> Engine<S> {
         *guard = scheduled;
     }
 
-    async fn shutdown(&self) {
+    fn shutdown(&self) {
         signal_stop_state(self.state.as_ref());
     }
 

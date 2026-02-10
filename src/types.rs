@@ -12,6 +12,11 @@ pub type Meta = HashMap<String, Value>;
 pub type Item = Value;
 
 #[inline]
+/// Convert a serializable value into the framework item type.
+///
+/// # Errors
+///
+/// Returns an error when serialization fails.
 pub fn item_from<T>(value: T) -> SilkwormResult<Item>
 where
     T: Serialize,
@@ -20,6 +25,11 @@ where
 }
 
 #[inline]
+/// Convert an item into a typed value.
+///
+/// # Errors
+///
+/// Returns an error when deserialization fails.
 pub fn item_into<T>(item: Item) -> SilkwormResult<T>
 where
     T: DeserializeOwned,

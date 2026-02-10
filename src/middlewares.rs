@@ -98,13 +98,18 @@ impl ProxyMiddleware {
         }
     }
 
+    /// Load proxies from a text file (`one proxy per line`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read.
     pub fn from_file(path: impl AsRef<Path>, random_selection: bool) -> std::io::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let proxies = content
             .lines()
-            .map(|line| line.trim())
+            .map(str::trim)
             .filter(|line| !line.is_empty())
-            .map(|line| line.to_string())
+            .map(ToString::to_string)
             .collect();
         Ok(Self::new(proxies, random_selection))
     }
@@ -203,7 +208,7 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
                 "Retrying request",
                 &[
                     ("url", req.url.clone()),
-                    ("delay", format!("{:.2}", delay)),
+                    ("delay", format!("{delay:.2}")),
                     ("attempt", (retry_times + 1).to_string()),
                     ("status", status.to_string()),
                 ],
@@ -289,7 +294,7 @@ impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
                     "Scheduling request delay",
                     &[
                         ("url", request.url.clone()),
-                        ("delay", format!("{:.3}", delay)),
+                        ("delay", format!("{delay:.3}")),
                     ],
                 );
                 request.set_request_delay_secs(delay);
@@ -350,8 +355,7 @@ impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
                         "content_type",
                         response
                             .content_type()
-                            .map(str::to_string)
-                            .unwrap_or_else(|| "unknown".to_string()),
+                            .map_or_else(|| "unknown".to_string(), str::to_string),
                     ),
                 ],
             );
@@ -373,7 +377,7 @@ fn looks_like_html<S: Spider>(
 ) -> bool {
     let content_type = response
         .content_type()
-        .map(|value| value.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     if allowed_types

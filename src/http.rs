@@ -28,6 +28,12 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    /// Create a configured HTTP client used by the engine and utility fetch APIs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `concurrency` is zero or the underlying HTTP client
+    /// cannot be constructed.
     pub fn new(
         concurrency: usize,
         default_headers: Headers,
@@ -59,6 +65,12 @@ impl HttpClient {
         })
     }
 
+    /// Fetch a request, optionally following redirects and truncating large bodies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when request execution fails, redirect handling fails, or
+    /// reading the response body fails.
     pub async fn fetch<S: Send + Sync + 'static>(
         &self,
         req: Request<S>,
@@ -74,7 +86,7 @@ impl HttpClient {
         let mut visited = Vec::with_capacity(self.max_redirects.saturating_add(1));
 
         loop {
-            let url = self.build_url(&current_req)?;
+            let url = Self::build_url(&current_req)?;
             visited.push(url.clone());
 
             let proxy = current_req.proxy().map(str::to_string);
@@ -108,7 +120,7 @@ impl HttpClient {
             let mut response = match builder.send().await {
                 Ok(resp) => resp,
                 Err(err) => {
-                    let msg = format!("Request to {} failed: {}", current_req.url, err);
+                    let msg = format!("Request to {} failed: {err}", current_req.url);
                     return Err(SilkwormError::Http(msg));
                 }
             };
@@ -178,7 +190,7 @@ impl HttpClient {
         }
     }
 
-    pub async fn close(&self) {}
+    pub fn close(&self) {}
 
     fn merge_headers(&self, request_headers: &Headers) -> Headers {
         let mut headers = self.default_headers.clone();
@@ -196,7 +208,7 @@ impl HttpClient {
         headers
     }
 
-    fn build_url<S>(&self, req: &Request<S>) -> SilkwormResult<String> {
+    fn build_url<S>(req: &Request<S>) -> SilkwormResult<String> {
         build_url_with_params(&req.url, &req.params)
     }
 
@@ -207,7 +219,7 @@ impl HttpClient {
             return Ok(client.clone());
         }
         let proxy = wreq::Proxy::all(proxy_url)
-            .map_err(|err| SilkwormError::Http(format!("Invalid proxy {}: {}", proxy_url, err)))?;
+            .map_err(|err| SilkwormError::Http(format!("Invalid proxy {proxy_url}: {err}")))?;
         let client = wreq::Client::builder()
             .redirect(Policy::none())
             .proxy(proxy)
@@ -232,12 +244,12 @@ impl HttpClient {
 pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
     if params.is_empty() {
         let mut parsed = Url::parse(url)
-            .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+            .map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
         parsed.set_fragment(None);
         return Ok(parsed.to_string());
     }
-    let mut parsed = Url::parse(url)
-        .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+    let mut parsed =
+        Url::parse(url).map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
     parsed.set_fragment(None);
 
     let merged = merged_query_pairs(&parsed, params);
@@ -254,8 +266,8 @@ pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResul
 }
 
 pub(crate) fn canonical_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
-    let mut parsed = Url::parse(url)
-        .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+    let mut parsed =
+        Url::parse(url).map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
     parsed.set_fragment(None);
     let mut merged = merged_query_pairs(&parsed, params);
     merged.sort();
@@ -362,7 +374,7 @@ fn redirect_request<S>(mut req: Request<S>, redirect_url: &str, status: u16) -> 
 
 fn normalize_headers(headers: &wreq::header::HeaderMap) -> Headers {
     let mut out = Headers::new();
-    for (name, value) in headers.iter() {
+    for (name, value) in headers {
         if let Ok(value) = value.to_str() {
             let key = name.to_string().to_ascii_lowercase();
             if let Some(existing) = out.get_mut(&key) {
@@ -431,17 +443,15 @@ mod tests {
                 let _ = socket.write_all(response.as_bytes()).await;
             }
         });
-        Ok((format!("http://{}", addr), handle))
+        Ok((format!("http://{addr}"), handle))
     }
 
     #[test]
     fn build_url_merges_params() {
-        let client =
-            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
         let req = Request::<()>::new("https://example.com/path?foo=bar")
             .with_param("foo", "baz")
             .with_param("q", "1");
-        let built = client.build_url(&req).expect("build url");
+        let built = HttpClient::build_url(&req).expect("build url");
         let parsed = url::Url::parse(&built).expect("parse url");
         let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
         assert_eq!(query.get("foo"), Some(&"baz".to_string()));
@@ -450,11 +460,9 @@ mod tests {
 
     #[test]
     fn build_url_preserves_repeated_query_keys() {
-        let client =
-            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
         let req =
             Request::<()>::new("https://example.com/path?tag=a&tag=b&x=1").with_param("q", "1");
-        let built = client.build_url(&req).expect("build url");
+        let built = HttpClient::build_url(&req).expect("build url");
         let parsed = url::Url::parse(&built).expect("parse url");
         let tags: Vec<String> = parsed
             .query_pairs()
@@ -466,10 +474,8 @@ mod tests {
 
     #[test]
     fn build_url_strips_fragment() {
-        let client =
-            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
         let req = Request::<()>::new("https://example.com/path?x=1#section");
-        let built = client.build_url(&req).expect("build url");
+        let built = HttpClient::build_url(&req).expect("build url");
 
         assert!(!built.contains('#'));
         assert_eq!(built, "https://example.com/path?x=1");

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -134,11 +135,13 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
 
     fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
         Box::pin(async move {
-            let mut guard = self.state.lock().await;
-            if let Some(file) = guard.file.as_mut() {
+            let file = {
+                let mut guard = self.state.lock().await;
+                guard.file.take()
+            };
+            if let Some(mut file) = file {
                 file.flush().await?;
             }
-            guard.file = None;
             self.logger.info(
                 "Closed JSON Lines pipeline",
                 &[("path", self.path.display().to_string())],
@@ -155,12 +158,25 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
         Box::pin(async move {
             let line = serde_json::to_string(&item)
                 .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
+            let mut file = {
+                let mut guard = self.state.lock().await;
+                guard.file.take().ok_or_else(|| {
+                    SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string())
+                })?
+            };
+
+            let write_result: SilkwormResult<()> = async {
+                file.write_all(line.as_bytes()).await?;
+                file.write_all(b"\n").await?;
+                Ok(())
+            }
+            .await;
+
             let mut guard = self.state.lock().await;
-            let file = guard.file.as_mut().ok_or_else(|| {
-                SilkwormError::Pipeline("JsonLinesPipeline not opened".to_string())
-            })?;
-            file.write_all(line.as_bytes()).await?;
-            file.write_all(b"\n").await?;
+            guard.file = Some(file);
+            drop(guard);
+
+            write_result?;
             Ok(item)
         })
     }
@@ -209,7 +225,7 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
                 .await?;
             let mut guard = self.state.lock().await;
             guard.file = Some(BufWriter::new(file));
-            guard.fieldnames = self.configured_fieldnames.clone();
+            guard.fieldnames.clone_from(&self.configured_fieldnames);
             guard.header_written = false;
             self.logger.info(
                 "Opened CSV pipeline",
@@ -221,11 +237,13 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
 
     fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
         Box::pin(async move {
-            let mut guard = self.state.lock().await;
-            if let Some(file) = guard.file.as_mut() {
+            let file = {
+                let mut guard = self.state.lock().await;
+                guard.file.take()
+            };
+            if let Some(mut file) = file {
                 file.flush().await?;
             }
-            guard.file = None;
             self.logger.info(
                 "Closed CSV pipeline",
                 &[("path", self.path.display().to_string())],
@@ -241,54 +259,59 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
     ) -> PipelineFuture<'a, SilkwormResult<Item>> {
         Box::pin(async move {
             let flattened = flatten_item(&item);
-            let mut guard = self.state.lock().await;
-            if guard.fieldnames.is_none() {
-                guard.fieldnames = Some(flattened.keys().cloned().collect());
-            }
-            let (header, row, write_header) = {
-                let fieldnames = guard.fieldnames.as_ref().ok_or_else(|| {
+            let (mut file, fieldnames, header_written) = {
+                let mut guard = self.state.lock().await;
+                if guard.fieldnames.is_none() {
+                    guard.fieldnames = Some(flattened.keys().cloned().collect());
+                }
+                let fieldnames = guard.fieldnames.clone().ok_or_else(|| {
                     SilkwormError::Pipeline("CsvPipeline fieldnames missing".to_string())
                 })?;
-                let header = if !guard.header_written {
-                    Some(
-                        fieldnames
-                            .iter()
-                            .map(|name| csv_escape(name))
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    )
-                } else {
-                    None
-                };
-                let row = fieldnames
-                    .iter()
-                    .map(|name| flattened.get(name).cloned().unwrap_or_default())
-                    .map(|value| csv_escape(&value))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let write_header = !guard.header_written;
-                (header, row, write_header)
+                let file = guard
+                    .file
+                    .take()
+                    .ok_or_else(|| SilkwormError::Pipeline("CsvPipeline not opened".to_string()))?;
+                (file, fieldnames, guard.header_written)
             };
 
-            if write_header {
+            let header = if header_written {
+                None
+            } else {
+                Some(
+                    fieldnames
+                        .iter()
+                        .map(|name| csv_escape(name))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            };
+            let row = fieldnames
+                .iter()
+                .map(|name| flattened.get(name).cloned().unwrap_or_default())
+                .map(|value| csv_escape(&value))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let wrote_header = header.is_some();
+            let write_result: SilkwormResult<()> = async {
                 if let Some(header) = header.as_ref() {
-                    {
-                        let file = guard.file.as_mut().ok_or_else(|| {
-                            SilkwormError::Pipeline("CsvPipeline not opened".to_string())
-                        })?;
-                        file.write_all(header.as_bytes()).await?;
-                        file.write_all(b"\n").await?;
-                    }
+                    file.write_all(header.as_bytes()).await?;
+                    file.write_all(b"\n").await?;
                 }
+                file.write_all(row.as_bytes()).await?;
+                file.write_all(b"\n").await?;
+                Ok(())
+            }
+            .await;
+
+            let mut guard = self.state.lock().await;
+            guard.file = Some(file);
+            if write_result.is_ok() && wrote_header {
                 guard.header_written = true;
             }
+            drop(guard);
 
-            let file = guard
-                .file
-                .as_mut()
-                .ok_or_else(|| SilkwormError::Pipeline("CsvPipeline not opened".to_string()))?;
-            file.write_all(row.as_bytes()).await?;
-            file.write_all(b"\n").await?;
+            write_result?;
             Ok(item)
         })
     }
@@ -327,13 +350,13 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
                 .truncate(true)
                 .open(&self.path)
                 .await?;
-            let mut guard = self.file.lock().await;
             let mut file = BufWriter::new(file);
             let header = format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<{}>\n",
                 sanitize_tag(&self.root_element)
             );
             file.write_all(header.as_bytes()).await?;
+            let mut guard = self.file.lock().await;
             *guard = Some(file);
             self.logger.info(
                 "Opened XML pipeline",
@@ -345,13 +368,15 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
 
     fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
         Box::pin(async move {
-            let mut guard = self.file.lock().await;
-            if let Some(file) = guard.as_mut() {
+            let file = {
+                let mut guard = self.file.lock().await;
+                guard.take()
+            };
+            if let Some(mut file) = file {
                 let footer = format!("</{}>\n", sanitize_tag(&self.root_element));
                 file.write_all(footer.as_bytes()).await?;
                 file.flush().await?;
             }
-            *guard = None;
             self.logger.info(
                 "Closed XML pipeline",
                 &[("path", self.path.display().to_string())],
@@ -366,12 +391,23 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
         _spider: Arc<S>,
     ) -> PipelineFuture<'a, SilkwormResult<Item>> {
         Box::pin(async move {
-            let mut guard = self.file.lock().await;
-            let file = guard
-                .as_mut()
-                .ok_or_else(|| SilkwormError::Pipeline("XmlPipeline not opened".to_string()))?;
+            let mut file = {
+                let mut guard = self.file.lock().await;
+                guard
+                    .take()
+                    .ok_or_else(|| SilkwormError::Pipeline("XmlPipeline not opened".to_string()))?
+            };
             let xml = build_xml(&self.item_element, &item, 1);
-            file.write_all(xml.as_bytes()).await?;
+            let write_result: SilkwormResult<()> = async {
+                file.write_all(xml.as_bytes()).await?;
+                Ok(())
+            }
+            .await;
+            let mut guard = self.file.lock().await;
+            *guard = Some(file);
+            drop(guard);
+
+            write_result?;
             Ok(item)
         })
     }
@@ -396,7 +432,7 @@ fn flatten_value(prefix: &str, value: &Item, out: &mut BTreeMap<String, String>)
     match value {
         Item::Object(map) => {
             for (key, nested) in map {
-                let next = format!("{}_{}", prefix, key);
+                let next = format!("{prefix}_{key}");
                 flatten_value(&next, nested, out);
             }
         }
@@ -444,7 +480,7 @@ fn build_xml(tag: &str, value: &Item, depth: usize) -> String {
             for (key, nested) in map {
                 out.push_str(&build_xml(key, nested, depth + 1));
             }
-            out.push_str(&format!("{indent}</{tag}>\n"));
+            let _ = writeln!(out, "{indent}</{tag}>");
             out
         }
         Item::Array(items) => {
@@ -452,7 +488,7 @@ fn build_xml(tag: &str, value: &Item, depth: usize) -> String {
             for item in items {
                 out.push_str(&build_xml("item", item, depth + 1));
             }
-            out.push_str(&format!("{indent}</{tag}>\n"));
+            let _ = writeln!(out, "{indent}</{tag}>");
             out
         }
         _ => {
