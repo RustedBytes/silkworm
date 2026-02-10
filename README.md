@@ -259,6 +259,17 @@ Check out the runnable examples in `examples/`, including:
 - `examples/hackernews_spider.rs`
 - `examples/sitemap_spider.rs`
 
+## Benchmarks
+
+Run the built-in benchmark suite:
+
+```bash
+cargo bench --bench core
+```
+
+The suite measures request construction/cloning, response decoding, URL follow
+helpers, and CSS/XPath extraction (including parse-each-time vs cached paths).
+
 ## License
 
 MIT
