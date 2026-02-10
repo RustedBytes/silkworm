@@ -77,6 +77,32 @@ Examples:
 - Keep logging structured (`key=value` fields) via `Logger`.
 - Avoid network-dependent tests; existing tests use local in-process servers.
 
+## Rust Best Practices
+
+- Prefer borrowing (`&T`, `&mut T`) over cloning; only clone when ownership
+  transfer is required and intentional.
+- Keep functions small and focused; extract helpers when a function mixes IO,
+  parsing, and orchestration concerns.
+- Avoid `unwrap`/`expect` in library/runtime code paths. Propagate errors with
+  `Result` and map into `SilkwormError` variants with useful context.
+- Use `?` for error propagation and prefer explicit error handling over silent
+  fallbacks.
+- In async code, avoid holding locks across `.await`, and avoid blocking calls
+  inside async tasks.
+- Prefer iterators and adapters for transformation-heavy logic; use loops where
+  control flow clarity is better.
+- Keep public APIs conservative and documented; avoid exposing internal types or
+  implementation details accidentally.
+- Derive and maintain useful traits (`Debug`, `Clone`, `PartialEq`, etc.) only
+  when they represent valid semantics for the type.
+- Prefer `#[must_use]` on return values where ignoring results is likely a bug.
+- Keep allocations intentional: use `String`/`Vec` ownership where necessary,
+  and slices/references when possible.
+- Write deterministic tests (no timing races or external network), and assert
+  behavior rather than only success paths.
+- Run formatter and test checks before finishing substantial changes:
+  `cargo fmt --all`, `cargo check --all-targets`, and `cargo test --all`.
+
 ## Consistency Checklist by Change Type
 
 - If changing public API:
