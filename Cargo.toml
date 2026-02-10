@@ -1,6 +1,6 @@
 [package]
 name = "silkworm-rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
@@ -54,7 +54,9 @@ regex = "1.12"
 wreq = { version = "6.0.0-rc.27", default-features = false, features = ["json", "gzip", "brotli", "deflate", "webpki-roots"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-scraper = "0.25"
+
+scraper = { git = "https://github.com/rust-scraper/scraper", features = ["atomic"] }
+
 sxd-document = { version = "0.3", optional = true }
 sxd_html = { version = "0.1", optional = true }
 sxd-xpath = { version = "0.4", optional = true }

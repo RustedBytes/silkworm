@@ -264,7 +264,7 @@ Check out the runnable examples in `examples/`, including:
 Run the built-in benchmark suite:
 
 ```bash
-cargo bench --bench core
+cargo bench --bench core --features="xpath"
 ```
 
 The suite measures request construction/cloning, response decoding, URL follow
