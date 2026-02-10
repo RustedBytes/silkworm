@@ -42,14 +42,15 @@ mod tests {
     use super::fetch_html;
     use crate::errors::SilkwormError;
     use scraper::Selector;
+    use std::io::ErrorKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    async fn start_test_server(body: &str) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test listener");
-        let addr = listener.local_addr().expect("listener addr");
+    async fn start_test_server(
+        body: &str,
+    ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
         let body = body.to_string();
         let handle = tokio::spawn(async move {
             if let Ok((mut socket, _)) = listener.accept().await {
@@ -73,13 +74,17 @@ mod tests {
                 let _ = socket.write_all(response.as_bytes()).await;
             }
         });
-        (format!("http://{}", addr), handle)
+        Ok((format!("http://{}", addr), handle))
     }
 
     #[tokio::test]
     async fn fetch_html_returns_text_and_document() {
         let body = "<html><body><h1>Hello</h1></body></html>";
-        let (url, handle) = start_test_server(body).await;
+        let (url, handle) = match start_test_server(body).await {
+            Ok(value) => value,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to start local test server: {err}"),
+        };
 
         let (text, document) = fetch_html(&url).await.expect("fetch html");
 

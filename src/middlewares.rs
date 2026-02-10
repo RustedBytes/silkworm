@@ -350,9 +350,8 @@ impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
                     (
                         "content_type",
                         response
-                            .headers
-                            .get("content-type")
-                            .cloned()
+                            .content_type()
+                            .map(str::to_string)
                             .unwrap_or_else(|| "unknown".to_string()),
                     ),
                 ],
@@ -374,8 +373,7 @@ fn looks_like_html<S: Spider>(
     sniff_bytes: usize,
 ) -> bool {
     let content_type = response
-        .headers
-        .get("content-type")
+        .content_type()
         .map(|value| value.to_lowercase())
         .unwrap_or_default();
 
@@ -398,7 +396,7 @@ fn looks_like_html<S: Spider>(
 
 #[inline]
 fn noop_callback<S: Spider>() -> Callback<S> {
-    Arc::new(|_spider, _response| Box::pin(async move { Vec::new() }))
+    Arc::new(|_spider, _response| Box::pin(async move { Ok(Vec::new()) }))
 }
 
 #[inline]
@@ -435,7 +433,7 @@ mod tests {
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 

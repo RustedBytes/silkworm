@@ -165,6 +165,7 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
 
 pub struct CsvPipeline {
     path: PathBuf,
+    configured_fieldnames: Option<Vec<String>>,
     state: AsyncMutex<CsvState>,
     logger: crate::logging::Logger,
 }
@@ -179,6 +180,7 @@ impl CsvPipeline {
     pub fn new(path: impl Into<PathBuf>, fieldnames: Option<Vec<String>>) -> Self {
         CsvPipeline {
             path: path.into(),
+            configured_fieldnames: fieldnames.clone(),
             state: AsyncMutex::new(CsvState {
                 file: None,
                 fieldnames,
@@ -203,6 +205,7 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
                 .await?;
             let mut guard = self.state.lock().await;
             guard.file = Some(BufWriter::new(file));
+            guard.fieldnames = self.configured_fieldnames.clone();
             guard.header_written = false;
             self.logger.info(
                 "Opened CSV pipeline",
@@ -454,9 +457,28 @@ fn build_xml(tag: &str, value: &Item, depth: usize) -> String {
 }
 
 fn sanitize_tag(tag: &str) -> String {
-    let mut cleaned = tag.replace([' ', '-'], "_");
+    let mut cleaned = String::with_capacity(tag.len());
+    for (idx, ch) in tag.chars().enumerate() {
+        let valid = if idx == 0 {
+            ch.is_ascii_alphabetic() || ch == '_'
+        } else {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | ':')
+        };
+        if valid {
+            cleaned.push(ch);
+        } else if !cleaned.ends_with('_') {
+            cleaned.push('_');
+        }
+    }
     if cleaned.is_empty() {
-        cleaned = "item".to_string();
+        return "item".to_string();
+    }
+    if !cleaned
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+    {
+        cleaned.insert(0, '_');
     }
     cleaned
 }
@@ -472,8 +494,24 @@ fn escape_xml(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_xml, csv_escape, flatten_item, sanitize_tag};
+    use super::{CsvPipeline, ItemPipeline, build_xml, csv_escape, flatten_item, sanitize_tag};
+    use crate::request::SpiderResult;
+    use crate::response::HtmlResponse;
+    use crate::spider::Spider;
     use crate::types::Item;
+    use std::sync::Arc;
+
+    struct TestSpider;
+
+    impl Spider for TestSpider {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Ok(Vec::new())
+        }
+    }
 
     #[test]
     fn flatten_item_flattens_nested_objects_and_arrays() {
@@ -505,11 +543,45 @@ mod tests {
     fn sanitize_tag_replaces_invalid_chars() {
         assert_eq!(sanitize_tag("my tag-name"), "my_tag_name");
         assert_eq!(sanitize_tag(""), "item");
+        assert_eq!(sanitize_tag("9 bad<tag"), "_bad_tag");
     }
 
     #[test]
     fn build_xml_escapes_text() {
         let xml = build_xml("item", &Item::from("a&b"), 1);
         assert_eq!(xml, "  <item>a&amp;b</item>\n");
+    }
+
+    #[tokio::test]
+    async fn csv_pipeline_resets_inferred_headers_between_open_calls() {
+        let path = format!(
+            "{}/silkworm_csv_reopen_{}_{}.csv",
+            std::env::temp_dir().display(),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        );
+        let pipeline = CsvPipeline::new(&path, None);
+        let spider = Arc::new(TestSpider);
+
+        pipeline.open(spider.clone()).await.expect("open #1");
+        pipeline
+            .process_item(serde_json::json!({ "a": 1 }), spider.clone())
+            .await
+            .expect("item #1");
+        pipeline.close(spider.clone()).await.expect("close #1");
+
+        pipeline.open(spider.clone()).await.expect("open #2");
+        pipeline
+            .process_item(serde_json::json!({ "b": 2 }), spider.clone())
+            .await
+            .expect("item #2");
+        pipeline.close(spider).await.expect("close #2");
+
+        let content = std::fs::read_to_string(&path).expect("csv read");
+        assert!(content.starts_with("b\n"));
+        let _ = std::fs::remove_file(path);
     }
 }

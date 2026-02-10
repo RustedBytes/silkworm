@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -91,8 +91,44 @@ pub struct EngineConfig<S: Spider> {
     pub request_timeout: Option<Duration>,
     pub log_stats_interval: Option<Duration>,
     pub max_pending_requests: Option<usize>,
+    pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
     pub keep_alive: bool,
+}
+
+struct SeenRequests {
+    entries: HashSet<Box<str>>,
+    order: VecDeque<Box<str>>,
+    max_entries: Option<usize>,
+}
+
+impl SeenRequests {
+    fn new(max_entries: Option<usize>) -> Self {
+        SeenRequests {
+            entries: HashSet::new(),
+            order: VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    fn insert_if_new(&mut self, url: &str) -> bool {
+        if self.entries.contains(url) {
+            return false;
+        }
+
+        let boxed = url.to_string().into_boxed_str();
+        if let Some(max_entries) = self.max_entries {
+            while self.entries.len() >= max_entries {
+                let Some(oldest) = self.order.pop_front() else {
+                    break;
+                };
+                self.entries.remove(oldest.as_ref());
+            }
+            self.order.push_back(boxed.clone());
+        }
+        self.entries.insert(boxed);
+        true
+    }
 }
 
 struct EngineState<S: Spider> {
@@ -100,7 +136,7 @@ struct EngineState<S: Spider> {
     http: HttpClient,
     queue_tx: mpsc::Sender<Request<S>>,
     queue_rx: AsyncMutex<mpsc::Receiver<Request<S>>>,
-    seen: AsyncMutex<HashSet<Box<str>>>,
+    seen: AsyncMutex<SeenRequests>,
     seen_count: AtomicUsize,
     stop: AtomicBool,
     pending: AtomicUsize,
@@ -115,6 +151,47 @@ struct EngineState<S: Spider> {
     html_max_size_bytes: usize,
 }
 
+struct PendingRequestGuard<S: Spider> {
+    state: Arc<EngineState<S>>,
+    finished: bool,
+}
+
+impl<S: Spider> PendingRequestGuard<S> {
+    fn new(state: Arc<EngineState<S>>) -> Self {
+        PendingRequestGuard {
+            state,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        finish_request_state(self.state.as_ref());
+    }
+}
+
+impl<S: Spider> Drop for PendingRequestGuard<S> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        finish_request_state(self.state.as_ref());
+        self.finished = true;
+    }
+}
+
+fn finish_request_state<S: Spider>(state: &EngineState<S>) {
+    let _ = state
+        .pending
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            Some(value.saturating_sub(1))
+        });
+    state.pending_notify.notify_waiters();
+}
+
 impl<S: Spider> Engine<S> {
     pub fn new(spider: S, config: EngineConfig<S>) -> SilkwormResult<Self> {
         let EngineConfig {
@@ -125,9 +202,15 @@ impl<S: Spider> Engine<S> {
             request_timeout,
             log_stats_interval,
             max_pending_requests,
+            max_seen_requests,
             html_max_size_bytes,
             keep_alive,
         } = config;
+        if max_seen_requests == Some(0) {
+            return Err(SilkwormError::Config(
+                "max_seen_requests must be greater than zero when set".to_string(),
+            ));
+        }
         let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
         let (queue_tx, queue_rx) = mpsc::channel(queue_size);
         let http = HttpClient::new(
@@ -146,7 +229,7 @@ impl<S: Spider> Engine<S> {
             http,
             queue_tx,
             queue_rx: AsyncMutex::new(queue_rx),
-            seen: AsyncMutex::new(HashSet::new()),
+            seen: AsyncMutex::new(SeenRequests::new(max_seen_requests)),
             seen_count: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
             pending: AtomicUsize::new(0),
@@ -264,13 +347,12 @@ impl<S: Spider> Engine<S> {
     async fn enqueue(&self, req: Request<S>) -> SilkwormResult<()> {
         if !req.dont_filter {
             let mut seen = self.state.seen.lock().await;
-            if seen.contains(req.url.as_str()) {
+            if !seen.insert_if_new(req.url.as_str()) {
                 self.state
                     .logger
                     .debug("Skipping already seen request", &[("url", req.url.clone())]);
                 return Ok(());
             }
-            seen.insert(req.url.clone().into_boxed_str());
             self.state.seen_count.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -302,6 +384,7 @@ impl<S: Spider> Engine<S> {
                 _ = self.state.stop_notify.notified() => None,
             };
             let Some(req) = req_opt else { break };
+            let mut pending_guard = PendingRequestGuard::new(self.state.clone());
 
             let result = self.process_request(req).await;
             if let Err(err) = result {
@@ -311,7 +394,7 @@ impl<S: Spider> Engine<S> {
                     .error("Failed to process request", &[("error", err.to_string())]);
             }
 
-            self.finish_request();
+            pending_guard.finish();
 
             if self.state.stop.load(Ordering::SeqCst) {
                 break;
@@ -361,7 +444,7 @@ impl<S: Spider> Engine<S> {
                     let html = resp.into_html(self.state.html_max_size_bytes);
                     self.state.spider.parse(html).await
                 };
-                for output in outputs {
+                for output in outputs? {
                     match output {
                         SpiderOutput::Request(req) => {
                             self.enqueue(*req).await?;
@@ -401,16 +484,6 @@ impl<S: Spider> Engine<S> {
     async fn shutdown(&self) {
         self.state.stop.store(true, Ordering::SeqCst);
         self.state.stop_notify.notify_waiters();
-    }
-
-    fn finish_request(&self) {
-        let _ = self
-            .state
-            .pending
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-                Some(value.saturating_sub(1))
-            });
-        self.state.pending_notify.notify_waiters();
     }
 
     async fn log_statistics(self, interval: Duration) {
@@ -467,7 +540,7 @@ impl<S: Spider> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, EngineConfig, Stats};
+    use super::{Engine, EngineConfig, SeenRequests, Stats};
     use crate::errors::SilkwormError;
     use crate::request::SpiderResult;
     use crate::response::HtmlResponse;
@@ -481,7 +554,7 @@ mod tests {
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 
@@ -501,6 +574,7 @@ mod tests {
             request_timeout: None,
             log_stats_interval: None,
             max_pending_requests: None,
+            max_seen_requests: None,
             html_max_size_bytes: 1,
             keep_alive: false,
         };
@@ -510,5 +584,37 @@ mod tests {
             Err(other) => panic!("expected config error, got {other:?}"),
             Ok(_) => panic!("expected error, got ok"),
         }
+    }
+
+    #[test]
+    fn engine_new_rejects_zero_max_seen_requests() {
+        let config = EngineConfig::<TestSpider> {
+            concurrency: 1,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            max_seen_requests: Some(0),
+            html_max_size_bytes: 1,
+            keep_alive: false,
+        };
+        let result = Engine::new(TestSpider, config);
+        match result {
+            Err(SilkwormError::Config(_)) => {}
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
+    #[test]
+    fn seen_requests_with_limit_evicts_oldest() {
+        let mut seen = SeenRequests::new(Some(2));
+        assert!(seen.insert_if_new("https://a"));
+        assert!(seen.insert_if_new("https://b"));
+        assert!(!seen.insert_if_new("https://a"));
+        assert!(seen.insert_if_new("https://c"));
+        assert!(seen.insert_if_new("https://a"));
     }
 }

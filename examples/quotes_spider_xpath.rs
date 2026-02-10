@@ -47,7 +47,7 @@ impl Spider for QuotesSpider {
             }
         }
 
-        out
+        Ok(out)
     }
 }
 

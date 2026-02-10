@@ -74,7 +74,7 @@ impl Spider for QuotesSpider {
 
         // Follow pagination links.
         out.extend(response.follow_css_outputs("li.next a", "href"));
-        out
+        Ok(out)
     }
 }
 
@@ -170,6 +170,7 @@ let request = Request::get("https://example.com/api")
 
 For per-request parsing, attach a callback with `with_callback_fn` or
 `callback_from_fn` (signature: `Fn(Arc<S>, Response<S>) -> SpiderResult<S>`).
+`SpiderResult<S>` is `Result<Vec<SpiderOutput<S>>, SilkwormError>`.
 
 ## Ergonomic Selectors
 
@@ -214,6 +215,7 @@ use silkworm::RunConfig;
 let config = RunConfig::new()
     .with_concurrency(32)
     .with_max_pending_requests(500)
+    .with_max_seen_requests(50_000)
     .with_log_stats_interval(Duration::from_secs(10))
     .with_request_timeout(Duration::from_secs(10))
     .with_html_max_size_bytes(2_000_000)

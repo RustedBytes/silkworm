@@ -80,7 +80,7 @@ impl Spider for ExportFormatsSpider {
             out.extend(response.follow_urls(next_links).into_iter().map(Into::into));
         }
 
-        out
+        Ok(out)
     }
 }
 

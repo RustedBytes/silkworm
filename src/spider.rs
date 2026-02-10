@@ -58,7 +58,7 @@ mod tests {
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 

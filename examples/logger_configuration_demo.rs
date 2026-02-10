@@ -43,9 +43,9 @@ impl Spider for LoggingSpider {
             status: response.status,
         };
         if let Ok(item) = item_from(item) {
-            vec![item.into()]
+            Ok(vec![item.into()])
         } else {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 }

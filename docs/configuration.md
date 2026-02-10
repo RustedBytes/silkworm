@@ -10,6 +10,7 @@ Key settings:
 - `request_timeout`: per-request timeout override.
 - `log_stats_interval`: optional periodic stats logging.
 - `max_pending_requests`: size of the request queue.
+- `max_seen_requests`: optional cap for the in-memory de-duplication set.
 - `html_max_size_bytes`: maximum HTML bytes to parse into HtmlResponse.
 - `keep_alive`: adds `Connection: keep-alive` header when missing.
 - `request_middlewares`, `response_middlewares`, `item_pipelines`.
@@ -23,6 +24,7 @@ use silkworm::{DelayMiddleware, JsonLinesPipeline, RunConfig, UserAgentMiddlewar
 
 let config = RunConfig::new()
     .with_concurrency(32)
+    .with_max_seen_requests(50_000)
     .with_request_timeout(Duration::from_secs(10))
     .with_request_middleware(UserAgentMiddleware::new(vec![], None))
     .with_request_middleware(DelayMiddleware::fixed(0.2))
@@ -41,6 +43,9 @@ Code:
 
 - `crawl` / `crawl_with`: async APIs that run on an existing Tokio runtime.
 - `run_spider` / `run_spider_with`: synchronous helpers that create a runtime.
+
+Note: `run_spider` and `run_spider_with` return a config error when called
+inside an existing Tokio runtime. Use `crawl`/`crawl_with` in async contexts.
 
 Code:
 - Run helpers: `../src/runner.rs`

@@ -53,7 +53,7 @@ impl Spider for QuotesSpider {
         // Using follow_css_outputs() for cleaner pagination
         out.extend(response.follow_css_outputs("li.next > a", "href"));
 
-        out
+        Ok(out)
     }
 }
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use serde_json::Number;
 
+use crate::errors::SilkwormResult;
 use crate::response::Response;
 use crate::types::{Headers, Item, Meta, Params};
 
@@ -295,7 +296,8 @@ pub enum SpiderOutput<S> {
     Item(Item),
 }
 
-pub type SpiderResult<S> = Vec<SpiderOutput<S>>;
+pub type SpiderOutputs<S> = Vec<SpiderOutput<S>>;
+pub type SpiderResult<S> = SilkwormResult<SpiderOutputs<S>>;
 
 impl<S> From<Request<S>> for SpiderOutput<S> {
     fn from(value: Request<S>) -> Self {
@@ -332,7 +334,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, SpiderOutput, callback_from, callback_from_fn};
+    use super::{Request, SpiderResult, callback_from, callback_from_fn};
     use crate::response::Response;
     use crate::types::{Headers, Item};
     use bytes::Bytes;
@@ -435,7 +437,9 @@ mod tests {
     async fn request_builder_callback_sets_closure() {
         let req = Request::<TestSpider>::builder("https://example.com")
             .callback_fn(
-                |_spider: Arc<TestSpider>, _response: Response<TestSpider>| async { Vec::new() },
+                |_spider: Arc<TestSpider>, _response: Response<TestSpider>| async {
+                    Ok(Vec::new())
+                },
             )
             .build();
 
@@ -447,8 +451,8 @@ mod tests {
         async fn handler(
             _spider: Arc<TestSpider>,
             _response: Response<TestSpider>,
-        ) -> Vec<SpiderOutput<TestSpider>> {
-            vec![Item::from("ok").into()]
+        ) -> SpiderResult<TestSpider> {
+            Ok(vec![Item::from("ok").into()])
         }
 
         let callback = callback_from_fn(handler);
@@ -461,7 +465,9 @@ mod tests {
             request,
         };
 
-        let outputs = callback(Arc::new(TestSpider), response).await;
+        let outputs = callback(Arc::new(TestSpider), response)
+            .await
+            .expect("callback outputs");
         assert_eq!(outputs.len(), 1);
     }
 
@@ -471,7 +477,7 @@ mod tests {
         let callback = callback_from(
             move |_spider: Arc<TestSpider>, _response: Response<TestSpider>| {
                 let suffix = suffix.clone();
-                async move { vec![Item::from(suffix).into()] }
+                async move { Ok(vec![Item::from(suffix).into()]) }
             },
         );
 
@@ -484,7 +490,9 @@ mod tests {
             request,
         };
 
-        let outputs = callback(Arc::new(TestSpider), response).await;
+        let outputs = callback(Arc::new(TestSpider), response)
+            .await
+            .expect("callback outputs");
         assert_eq!(outputs.len(), 1);
     }
 
@@ -492,7 +500,7 @@ mod tests {
     async fn request_with_callback_fn_accepts_closure() {
         let request = Request::<TestSpider>::new("https://example.com").with_callback_fn(
             |_spider: Arc<TestSpider>, _response: Response<TestSpider>| async {
-                vec![Item::from("ok").into()]
+                Ok(vec![Item::from("ok").into()])
             },
         );
 
@@ -505,7 +513,9 @@ mod tests {
             request,
         };
 
-        let outputs = callback(Arc::new(TestSpider), response).await;
+        let outputs = callback(Arc::new(TestSpider), response)
+            .await
+            .expect("callback outputs");
         assert_eq!(outputs.len(), 1);
     }
 }

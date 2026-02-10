@@ -55,7 +55,7 @@ wreq = { version = "6.0.0-rc.27", default-features = false, features = ["json", 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-scraper = { git = "https://github.com/rust-scraper/scraper", features = ["atomic"] }
+scraper = { git = "https://github.com/rust-scraper/scraper", rev = "f3132d9e06e652e2a4b3031bf7fc3ec3c6a817ce" }
 
 sxd-document = { version = "0.3", optional = true }
 sxd_html = { version = "0.1", optional = true }

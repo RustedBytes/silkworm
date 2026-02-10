@@ -27,7 +27,8 @@ pub use pipelines::{
     CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, PipelineFuture, XmlPipeline,
 };
 pub use request::{
-    Callback, CallbackFuture, Request, SpiderOutput, SpiderResult, callback_from, callback_from_fn,
+    Callback, CallbackFuture, Request, SpiderOutput, SpiderOutputs, SpiderResult, callback_from,
+    callback_from_fn,
 };
 pub use response::{HtmlElement, HtmlResponse, Response};
 pub use runner::{RunConfig, crawl, crawl_with, run_spider, run_spider_with};

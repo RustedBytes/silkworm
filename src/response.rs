@@ -152,8 +152,7 @@ impl<S> Response<S> {
 
     pub fn looks_like_html(&self) -> bool {
         let content_type = self
-            .headers
-            .get("content-type")
+            .content_type()
             .map(|value| value.to_lowercase())
             .unwrap_or_default();
 
@@ -328,7 +327,7 @@ impl<S> HtmlResponse<S> {
     pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         #[cfg(feature = "xpath")]
         {
-            return xpath_from_source(self.html_source(), selector);
+            xpath_from_source(self.html_source(), selector)
         }
 
         #[cfg(not(feature = "xpath"))]
@@ -877,8 +876,18 @@ fn decode_with_label(body: &[u8], label: &str) -> Option<(String, String)> {
     Some((text.into_owned(), encoding.name().to_string()))
 }
 
+fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option<&'a str> {
+    if let Some(value) = headers.get(name) {
+        return Some(value.as_str());
+    }
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
 fn encoding_from_headers(headers: &Headers) -> Option<String> {
-    let content_type = headers.get("content-type")?;
+    let content_type = header_value_case_insensitive(headers, "content-type")?;
     static CHARSET_RE: OnceLock<Regex> = OnceLock::new();
     let re =
         CHARSET_RE.get_or_init(|| Regex::new(r#"(?i)charset=([^"'\s;]+)"#).expect("charset regex"));
@@ -993,7 +1002,7 @@ mod tests {
     #[test]
     fn follow_url_preserves_callback() {
         async fn handler(_spider: Arc<()>, _response: Response<()>) -> SpiderResult<()> {
-            Vec::new()
+            Ok(Vec::new())
         }
 
         let callback = callback_from_fn(handler);

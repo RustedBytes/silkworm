@@ -129,9 +129,9 @@ impl SitemapSpider {
         }
 
         if let Ok(item) = item_from(item) {
-            vec![item.into()]
+            Ok(vec![item.into()])
         } else {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 }
@@ -141,15 +141,13 @@ impl Spider for SitemapSpider {
         "sitemap_metadata"
     }
 
-    fn start_requests(&self) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
-        async move {
-            vec![
-                Request::get(self.sitemap_url.clone())
-                    .with_callback_fn(parse_sitemap)
-                    .with_allow_non_html(true)
-                    .with_dont_filter(true),
-            ]
-        }
+    async fn start_requests(&self) -> Vec<Request<Self>> {
+        vec![
+            Request::get(self.sitemap_url.clone())
+                .with_callback_fn(parse_sitemap)
+                .with_allow_non_html(true)
+                .with_dont_filter(true),
+        ]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -177,7 +175,7 @@ fn parse_sitemap_inner(
                 ("status", response.status.to_string()),
             ],
         );
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let body = response.text();
@@ -186,7 +184,7 @@ fn parse_sitemap_inner(
 
     if urls.is_empty() {
         logger.warn("No URLs found in sitemap", &[("url", response.url.clone())]);
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut out = Vec::new();
@@ -211,7 +209,7 @@ fn parse_sitemap_inner(
         out.push(req.into());
     }
 
-    out
+    Ok(out)
 }
 
 fn extract_sitemap_urls(body: &str) -> Vec<String> {

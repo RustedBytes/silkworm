@@ -5,7 +5,7 @@ pub use crate::middlewares::{
 pub use crate::pipelines::{
     CallbackPipeline, CsvPipeline, ItemPipeline, JsonLinesPipeline, PipelineFuture, XmlPipeline,
 };
-pub use crate::request::{Request, SpiderResult};
+pub use crate::request::{Request, SpiderOutputs, SpiderResult};
 pub use crate::response::HtmlResponse;
 pub use crate::runner::RunConfig;
 pub use crate::spider::Spider;

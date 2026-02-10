@@ -45,7 +45,7 @@ impl Spider for QuotesSpider {
             }
         }
 
-        out
+        Ok(out)
     }
 }
 
@@ -84,10 +84,10 @@ async fn validate_item(item: Item, _spider: Arc<QuotesSpider>) -> SilkwormResult
                 .map(str::to_string)
         });
 
-    if let Some(text) = text {
-        if text.trim().len() < 10 {
-            println!("Warning: short quote found");
-        }
+    if let Some(text) = text
+        && text.trim().len() < 10
+    {
+        println!("Warning: short quote found");
     }
     Ok(item)
 }

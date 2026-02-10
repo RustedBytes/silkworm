@@ -31,7 +31,7 @@ impl Spider for QuotesSpider {
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
-        Vec::new()
+        Ok(Vec::new())
     }
 }
 ```
@@ -125,7 +125,9 @@ let links = response.select_attrs("a.next", "href");
 
 ## Output Model
 
-Spider callbacks return a `SpiderResult`, which is a list of `SpiderOutput`:
+Spider callbacks return a `SpiderResult`, which is:
+
+- `Result<Vec<SpiderOutput<S>>, SilkwormError>`
 
 - `SpiderOutput::Request` for new requests.
 - `SpiderOutput::Item` for data items.
@@ -142,4 +144,5 @@ use serde_json::json;
 let mut out = Vec::new();
 out.push(Request::get("https://example.com/page/2").into());
 out.push(json!({ "title": "Hello" }).into());
+Ok(out)
 ```

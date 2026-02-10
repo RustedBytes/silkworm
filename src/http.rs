@@ -127,7 +127,9 @@ impl HttpClient {
                     )));
                 }
 
-                let location = headers.get("location").cloned().unwrap_or_default();
+                let location = header_value_case_insensitive(&headers, "location")
+                    .map(str::to_string)
+                    .unwrap_or_default();
                 let redirect_url = resolve_redirect_url(&url, &location);
                 if visited.iter().any(|seen| seen == &redirect_url) {
                     return Err(SilkwormError::Http("Redirect loop detected".to_string()));
@@ -242,7 +244,8 @@ impl HttpClient {
         if !self.follow_redirects {
             return false;
         }
-        matches!(status, 301 | 302 | 303 | 307 | 308) && headers.contains_key("location")
+        matches!(status, 301 | 302 | 303 | 307 | 308)
+            && header_value_case_insensitive(headers, "location").is_some()
     }
 }
 
@@ -282,10 +285,20 @@ fn normalize_headers(headers: &wreq::header::HeaderMap) -> Headers {
     let mut out = Headers::new();
     for (name, value) in headers.iter() {
         if let Ok(value) = value.to_str() {
-            out.insert(name.to_string(), value.to_string());
+            out.insert(name.to_string().to_ascii_lowercase(), value.to_string());
         }
     }
     out
+}
+
+fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option<&'a str> {
+    if let Some(value) = headers.get(name) {
+        return Some(value.as_str());
+    }
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 #[cfg(test)]
@@ -353,7 +366,7 @@ mod tests {
     fn normalize_headers_copies_valid_entries() {
         let mut headers = wreq::header::HeaderMap::new();
         headers.insert(
-            "content-type",
+            "Content-Type",
             wreq::header::HeaderValue::from_static("text/html"),
         );
         let normalized = normalize_headers(&headers);
@@ -361,5 +374,17 @@ mod tests {
             normalized.get("content-type").map(String::as_str),
             Some("text/html")
         );
+    }
+
+    #[test]
+    fn should_follow_redirect_is_case_insensitive_for_location() {
+        let client =
+            HttpClient::new(1, Headers::new(), None, 1024, true, 3, false).expect("client");
+        let mut headers = Headers::new();
+        headers.insert(
+            "Location".to_string(),
+            "https://example.com/next".to_string(),
+        );
+        assert!(client.should_follow_redirect(302, &headers));
     }
 }

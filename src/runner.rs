@@ -15,6 +15,7 @@ pub struct RunConfig<S: Spider> {
     pub request_timeout: Option<Duration>,
     pub log_stats_interval: Option<Duration>,
     pub max_pending_requests: Option<usize>,
+    pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
     pub keep_alive: bool,
 }
@@ -29,6 +30,7 @@ impl<S: Spider> Default for RunConfig<S> {
             request_timeout: None,
             log_stats_interval: None,
             max_pending_requests: None,
+            max_seen_requests: None,
             html_max_size_bytes: 5_000_000,
             keep_alive: false,
         }
@@ -85,6 +87,11 @@ impl<S: Spider> RunConfig<S> {
         self
     }
 
+    pub fn with_max_seen_requests(mut self, max_seen_requests: usize) -> Self {
+        self.max_seen_requests = Some(max_seen_requests);
+        self
+    }
+
     pub fn with_html_max_size_bytes(mut self, html_max_size_bytes: usize) -> Self {
         self.html_max_size_bytes = html_max_size_bytes;
         self
@@ -120,6 +127,7 @@ impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
             request_timeout: config.request_timeout,
             log_stats_interval: config.log_stats_interval,
             max_pending_requests: config.max_pending_requests,
+            max_seen_requests: config.max_seen_requests,
             html_max_size_bytes: config.html_max_size_bytes,
             keep_alive: config.keep_alive,
         }
@@ -142,6 +150,12 @@ pub fn run_spider<S: Spider>(spider: S) -> SilkwormResult<()> {
 }
 
 pub fn run_spider_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormResult<()> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(SilkwormError::Config(
+            "run_spider_with cannot run inside an existing Tokio runtime; use crawl_with instead"
+                .to_string(),
+        ));
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -170,7 +184,7 @@ mod tests {
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 
@@ -179,10 +193,11 @@ mod tests {
         let config: RunConfig<TestSpider> = RunConfig::default();
         assert_eq!(config.concurrency, 16);
         assert_eq!(config.html_max_size_bytes, 5_000_000);
-        assert_eq!(config.keep_alive, false);
+        assert!(!config.keep_alive);
         assert!(config.request_timeout.is_none());
         assert!(config.log_stats_interval.is_none());
         assert!(config.max_pending_requests.is_none());
+        assert!(config.max_seen_requests.is_none());
     }
 
     #[test]
@@ -195,6 +210,7 @@ mod tests {
             request_timeout: Some(std::time::Duration::from_secs(3)),
             log_stats_interval: Some(std::time::Duration::from_secs(1)),
             max_pending_requests: Some(9),
+            max_seen_requests: Some(11),
             html_max_size_bytes: 123,
             keep_alive: true,
         };
@@ -209,8 +225,9 @@ mod tests {
             Some(std::time::Duration::from_secs(1))
         );
         assert_eq!(engine_config.max_pending_requests, Some(9));
+        assert_eq!(engine_config.max_seen_requests, Some(11));
         assert_eq!(engine_config.html_max_size_bytes, 123);
-        assert_eq!(engine_config.keep_alive, true);
+        assert!(engine_config.keep_alive);
     }
 
     #[test]
@@ -220,6 +237,7 @@ mod tests {
             .with_request_timeout(std::time::Duration::from_secs(5))
             .with_log_stats_interval(std::time::Duration::from_secs(2))
             .with_max_pending_requests(12)
+            .with_max_seen_requests(48)
             .with_html_max_size_bytes(321)
             .with_keep_alive(true);
 
@@ -233,8 +251,9 @@ mod tests {
             Some(std::time::Duration::from_secs(2))
         );
         assert_eq!(config.max_pending_requests, Some(12));
+        assert_eq!(config.max_seen_requests, Some(48));
         assert_eq!(config.html_max_size_bytes, 321);
-        assert_eq!(config.keep_alive, true);
+        assert!(config.keep_alive);
     }
 
     #[test]
@@ -261,5 +280,17 @@ mod tests {
 
         assert_eq!(config.request_middlewares.len(), 1);
         assert_eq!(config.response_middlewares.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_spider_with_returns_config_error_inside_runtime() {
+        let result = super::run_spider_with(TestSpider, RunConfig::default());
+        match result {
+            Err(crate::errors::SilkwormError::Config(message)) => {
+                assert!(message.contains("crawl_with"));
+            }
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
     }
 }

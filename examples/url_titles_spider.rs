@@ -124,29 +124,27 @@ impl Spider for UrlTitlesSpider {
         "url_titles_from_file"
     }
 
-    fn start_requests(&self) -> impl std::future::Future<Output = Vec<Request<Self>>> + Send + '_ {
-        async move {
-            let records = self.load_records();
-            let mut out = Vec::new();
+    async fn start_requests(&self) -> Vec<Request<Self>> {
+        let records = self.load_records();
+        let mut out = Vec::new();
 
-            for record in records {
-                let url = record
-                    .get("url")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if url.is_empty() {
-                    continue;
-                }
-                out.push(
-                    Request::get(url)
-                        .with_meta_entries([("record", Value::Object(record))])
-                        .with_dont_filter(true),
-                );
+        for record in records {
+            let url = record
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            if url.is_empty() {
+                continue;
             }
-
-            out
+            out.push(
+                Request::get(url)
+                    .with_meta_entries([("record", Value::Object(record))])
+                    .with_dont_filter(true),
+            );
         }
+
+        out
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -166,7 +164,7 @@ impl Spider for UrlTitlesSpider {
         );
 
         let item = item_from(&record).unwrap_or(Value::Object(record));
-        vec![item.into()]
+        Ok(vec![item.into()])
     }
 }
 

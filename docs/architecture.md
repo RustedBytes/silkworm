@@ -69,16 +69,16 @@ Relevant code:
 ## Request De-Duplication
 
 Silkworm maintains a `seen` set of URLs. If a request is not marked as
-`dont_filter`, the engine skips duplicates.
+`dont_filter`, the engine skips duplicates. You can optionally cap the set
+with `max_seen_requests` to bound memory.
 
 ```rust
 // enqueue (excerpt)
 if !req.dont_filter {
     let mut seen = self.state.seen.lock().await;
-    if seen.contains(req.url.as_str()) {
+    if !seen.insert_if_new(req.url.as_str()) {
         return Ok(());
     }
-    seen.insert(req.url.clone().into_boxed_str());
 }
 ```
 
@@ -95,8 +95,10 @@ with request headers and applies a request-specific timeout when set. If
 is not already present.
 
 ```rust
-let req = self.apply_request_middlewares(req).await;
-self.state.requests_sent_increment();
+for mw in &self.state.request_middlewares {
+    req = mw.process_request(req, self.state.spider.clone()).await;
+}
+self.state.stats.requests_sent.fetch_add(1, Ordering::SeqCst);
 let resp = self.state.http.fetch(req).await?;
 ```
 
@@ -125,7 +127,9 @@ match processed {
         } else {
             self.state.spider.parse(resp.into_html(self.state.html_max_size_bytes)).await
         };
-        self.handle_outputs(outputs).await?;
+        for output in outputs? {
+            // enqueue requests / run item pipelines
+        }
     }
 }
 ```
