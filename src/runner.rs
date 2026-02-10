@@ -43,15 +43,18 @@ impl<S: Spider> Default for RunConfig<S> {
 
 impl<S: Spider> RunConfig<S> {
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = concurrency;
         self
     }
 
+    #[must_use]
     pub fn with_request_middleware<M>(mut self, middleware: M) -> Self
     where
         M: RequestMiddleware<S> + 'static,
@@ -60,6 +63,7 @@ impl<S: Spider> RunConfig<S> {
         self
     }
 
+    #[must_use]
     pub fn with_response_middleware<M>(mut self, middleware: M) -> Self
     where
         M: ResponseMiddleware<S> + 'static,
@@ -68,6 +72,7 @@ impl<S: Spider> RunConfig<S> {
         self
     }
 
+    #[must_use]
     pub fn with_item_pipeline<P>(mut self, pipeline: P) -> Self
     where
         P: ItemPipeline<S> + 'static,
@@ -76,46 +81,55 @@ impl<S: Spider> RunConfig<S> {
         self
     }
 
+    #[must_use]
     pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = Some(timeout);
         self
     }
 
+    #[must_use]
     pub fn with_log_stats_interval(mut self, interval: Duration) -> Self {
         self.log_stats_interval = Some(interval);
         self
     }
 
+    #[must_use]
     pub fn with_max_pending_requests(mut self, max_pending_requests: usize) -> Self {
         self.max_pending_requests = Some(max_pending_requests);
         self
     }
 
+    #[must_use]
     pub fn with_max_seen_requests(mut self, max_seen_requests: usize) -> Self {
         self.max_seen_requests = Some(max_seen_requests);
         self
     }
 
+    #[must_use]
     pub fn with_unbounded_seen_requests(mut self) -> Self {
         self.max_seen_requests = None;
         self
     }
 
+    #[must_use]
     pub fn with_html_max_size_bytes(mut self, html_max_size_bytes: usize) -> Self {
         self.html_max_size_bytes = html_max_size_bytes;
         self
     }
 
+    #[must_use]
     pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
         self.keep_alive = keep_alive;
         self
     }
 
+    #[must_use]
     pub fn with_fail_fast(mut self, fail_fast: bool) -> Self {
         self.fail_fast = fail_fast;
         self
     }
 
+    #[must_use]
     pub fn with_middlewares<Req, Resp>(
         mut self,
         request_middlewares: Req,

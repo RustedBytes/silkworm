@@ -552,13 +552,12 @@ impl<S: Spider> Engine<S> {
         );
         self.state.pending.fetch_add(1, Ordering::SeqCst);
 
-        let state = self.state.clone();
-        let task_state = state.clone();
+        let task_state = self.state.clone();
         let mut stop_rx = task_state.stop_rx.clone();
-        let mut scheduled = state.scheduled_requests.lock().await;
+        let mut scheduled = self.state.scheduled_requests.lock().await;
         scheduled.spawn(async move {
             tokio::select! {
-                _ = tokio::time::sleep(delay) => {
+                () = tokio::time::sleep(delay) => {
                     if task_state.stop.load(Ordering::SeqCst) {
                         finish_request_state(task_state.as_ref());
                         return;
@@ -727,7 +726,7 @@ impl<S: Spider> Engine<S> {
             }
 
             tokio::select! {
-                _ = self.state.ready_notify.notified() => {}
+                () = self.state.ready_notify.notified() => {}
                 _ = stop_rx.changed() => {
                     if *stop_rx.borrow() {
                         return None;
@@ -832,9 +831,9 @@ impl<S: Spider> Engine<S> {
             }
 
             tokio::select! {
-                _ = self.state.pending_notify.notified() => {}
-                _ = self.state.item_pending_notify.notified() => {}
-                _ = self.state.fatal_error_notify.notified() => {
+                () = self.state.pending_notify.notified() => {}
+                () = self.state.item_pending_notify.notified() => {}
+                () = self.state.fatal_error_notify.notified() => {
                     if let Some(err) = self.take_fatal_error().await {
                         return Err(err);
                     }
@@ -922,8 +921,15 @@ impl<S: Spider> Engine<S> {
     }
 
     async fn shutdown_scheduled_requests(&self) {
-        let mut scheduled = self.state.scheduled_requests.lock().await;
+        let mut scheduled = {
+            let mut guard = self.state.scheduled_requests.lock().await;
+            let mut scheduled = JoinSet::new();
+            std::mem::swap(&mut *guard, &mut scheduled);
+            scheduled
+        };
         scheduled.shutdown().await;
+        let mut guard = self.state.scheduled_requests.lock().await;
+        *guard = scheduled;
     }
 
     async fn shutdown(&self) {
@@ -968,14 +974,14 @@ impl<S: Spider> Engine<S> {
         };
 
         let mut out = vec![
-            ("elapsed_seconds", format!("{:.1}", elapsed)),
+            ("elapsed_seconds", format!("{elapsed:.1}")),
             ("requests_sent", requests_sent.to_string()),
             ("responses_received", responses_received.to_string()),
             ("items_scraped", items_scraped.to_string()),
             ("errors", errors.to_string()),
             ("pending_requests", pending.to_string()),
             ("pending_items", pending_items.to_string()),
-            ("requests_per_second", format!("{:.2}", rate)),
+            ("requests_per_second", format!("{rate:.2}")),
             ("seen_requests", seen.to_string()),
         ];
 

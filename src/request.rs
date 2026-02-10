@@ -77,6 +77,7 @@ impl<S> fmt::Debug for Request<S> {
 }
 
 impl<S> Request<S> {
+    #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Request {
             url: url.into(),
@@ -94,30 +95,36 @@ impl<S> Request<S> {
     }
 
     #[inline]
+    #[must_use]
     pub fn builder(url: impl Into<String>) -> RequestBuilder<S> {
         RequestBuilder::new(url)
     }
 
     #[inline]
+    #[must_use]
     pub fn get(url: impl Into<String>) -> Self {
         Self::new(url)
     }
 
     #[inline]
+    #[must_use]
     pub fn post(url: impl Into<String>) -> Self {
         Self::new(url).with_method("POST")
     }
 
+    #[must_use]
     pub fn with_method(mut self, method: impl Into<String>) -> Self {
         self.method = method.into();
         self
     }
 
+    #[must_use]
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
     pub fn with_headers<I, K, V>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -130,11 +137,13 @@ impl<S> Request<S> {
         self
     }
 
+    #[must_use]
     pub fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
     pub fn with_params<I, K, V>(mut self, params: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -147,36 +156,43 @@ impl<S> Request<S> {
         self
     }
 
+    #[must_use]
     pub fn with_data(mut self, data: impl Into<Bytes>) -> Self {
         self.data = Some(data.into());
         self
     }
 
+    #[must_use]
     pub fn with_json(mut self, json: Item) -> Self {
         self.json = Some(json);
         self
     }
 
+    #[must_use]
     pub fn with_meta(mut self, key: impl Into<String>, value: Item) -> Self {
         self.meta.insert(key.into(), value);
         self
     }
 
+    #[must_use]
     pub fn with_meta_str(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.meta.insert(key.into(), Item::String(value.into()));
         self
     }
 
+    #[must_use]
     pub fn with_meta_bool(mut self, key: impl Into<String>, value: bool) -> Self {
         self.meta.insert(key.into(), Item::Bool(value));
         self
     }
 
     #[inline]
+    #[must_use]
     pub fn with_allow_non_html(self, allow_non_html: bool) -> Self {
         self.with_meta_bool(meta_keys::ALLOW_NON_HTML, allow_non_html)
     }
 
+    #[must_use]
     pub fn with_meta_number<N>(mut self, key: impl Into<String>, value: N) -> Self
     where
         N: Into<Number>,
@@ -185,6 +201,7 @@ impl<S> Request<S> {
         self
     }
 
+    #[must_use]
     pub fn with_meta_entries<I, K>(mut self, meta: I) -> Self
     where
         I: IntoIterator<Item = (K, Item)>,
@@ -242,6 +259,7 @@ impl<S> Request<S> {
     }
 
     #[inline]
+    #[must_use]
     pub fn with_proxy(self, proxy: impl Into<String>) -> Self {
         self.with_meta_str(meta_keys::PROXY, proxy)
     }
@@ -349,16 +367,19 @@ impl<S> Request<S> {
         next
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
+    #[must_use]
     pub fn with_callback(mut self, callback: Callback<S>) -> Self {
         self.callback = Some(callback);
         self
     }
 
+    #[must_use]
     pub fn with_callback_fn<F, Fut>(mut self, func: F) -> Self
     where
         S: Send + Sync + 'static,
@@ -369,16 +390,19 @@ impl<S> Request<S> {
         self
     }
 
+    #[must_use]
     pub fn with_dont_filter(mut self, dont_filter: bool) -> Self {
         self.dont_filter = dont_filter;
         self
     }
 
+    #[must_use]
     pub fn with_priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
     }
 
+    #[must_use]
     pub fn replace<F>(&self, updater: F) -> Self
     where
         F: FnOnce(&mut Request<S>),
@@ -394,32 +418,38 @@ pub struct RequestBuilder<S> {
 }
 
 impl<S> RequestBuilder<S> {
+    #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         RequestBuilder {
             request: Request::new(url),
         }
     }
 
+    #[must_use]
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.request.headers.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
     pub fn param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.request.params.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
     pub fn json(mut self, value: impl Into<Item>) -> Self {
         self.request.json = Some(value.into());
         self
     }
 
+    #[must_use]
     pub fn data(mut self, data: impl Into<Bytes>) -> Self {
         self.request.data = Some(data.into());
         self
     }
 
+    #[must_use]
     pub fn callback_fn<F, Fut>(mut self, func: F) -> Self
     where
         S: Send + Sync + 'static,
@@ -430,16 +460,19 @@ impl<S> RequestBuilder<S> {
         self
     }
 
+    #[must_use]
     pub fn dont_filter(mut self, dont_filter: bool) -> Self {
         self.request.dont_filter = dont_filter;
         self
     }
 
+    #[must_use]
     pub fn priority(mut self, priority: i32) -> Self {
         self.request.priority = priority;
         self
     }
 
+    #[must_use]
     pub fn allow_non_html(mut self, allow_non_html: bool) -> Self {
         self.request.meta.insert(
             meta_keys::ALLOW_NON_HTML.to_string(),
@@ -449,6 +482,7 @@ impl<S> RequestBuilder<S> {
     }
 
     #[inline]
+    #[must_use]
     pub fn build(self) -> Request<S> {
         self.request
     }
@@ -475,6 +509,7 @@ impl<S> From<Item> for SpiderOutput<S> {
     }
 }
 
+#[must_use]
 pub fn callback_from<S, F, Fut>(func: F) -> Callback<S>
 where
     S: Send + Sync + 'static,
@@ -488,6 +523,7 @@ where
 }
 
 #[inline]
+#[must_use]
 pub fn callback_from_fn<S, Fut>(func: fn(Arc<S>, Response<S>) -> Fut) -> Callback<S>
 where
     S: Send + Sync + 'static,

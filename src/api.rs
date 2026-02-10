@@ -38,20 +38,24 @@ impl Default for UtilityFetchOptions {
 
 impl UtilityFetchOptions {
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = concurrency;
         self
     }
 
+    #[must_use]
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.default_headers.insert(key.into(), value.into());
         self
     }
 
+    #[must_use]
     pub fn with_headers<I, K, V>(mut self, headers: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -64,31 +68,37 @@ impl UtilityFetchOptions {
         self
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
+    #[must_use]
     pub fn without_timeout(mut self) -> Self {
         self.timeout = None;
         self
     }
 
+    #[must_use]
     pub fn with_html_max_size_bytes(mut self, html_max_size_bytes: usize) -> Self {
         self.html_max_size_bytes = html_max_size_bytes;
         self
     }
 
+    #[must_use]
     pub fn with_follow_redirects(mut self, follow_redirects: bool) -> Self {
         self.follow_redirects = follow_redirects;
         self
     }
 
+    #[must_use]
     pub fn with_max_redirects(mut self, max_redirects: usize) -> Self {
         self.max_redirects = max_redirects;
         self
     }
 
+    #[must_use]
     pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
         self.keep_alive = keep_alive;
         self

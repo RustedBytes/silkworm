@@ -33,6 +33,7 @@ pub struct CallbackPipeline<S: Spider> {
 }
 
 impl<S: Spider> CallbackPipeline<S> {
+    #[must_use]
     pub fn new<F, Fut>(callback: F) -> Self
     where
         F: Fn(Item, Arc<S>) -> Fut + Send + Sync + 'static,
@@ -48,6 +49,7 @@ impl<S: Spider> CallbackPipeline<S> {
         }
     }
 
+    #[must_use]
     pub fn from_sync<F>(callback: F) -> Self
     where
         F: Fn(Item, Arc<S>) -> SilkwormResult<Item> + Send + Sync + 'static,
@@ -99,6 +101,7 @@ struct JsonLinesState {
 }
 
 impl JsonLinesPipeline {
+    #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         JsonLinesPipeline {
             path: path.into(),
@@ -177,6 +180,7 @@ struct CsvState {
 }
 
 impl CsvPipeline {
+    #[must_use]
     pub fn new(path: impl Into<PathBuf>, fieldnames: Option<Vec<String>>) -> Self {
         CsvPipeline {
             path: path.into(),
@@ -299,6 +303,7 @@ pub struct XmlPipeline {
 }
 
 impl XmlPipeline {
+    #[must_use]
     pub fn new(path: impl Into<PathBuf>, root_element: &str, item_element: &str) -> Self {
         XmlPipeline {
             path: path.into(),
@@ -415,7 +420,8 @@ fn scalar_to_string(value: &Item) -> String {
         Item::Bool(v) => v.to_string(),
         Item::Number(v) => v.to_string(),
         Item::String(v) => v.clone(),
-        Item::Array(_) | Item::Object(_) => serde_json::to_string(value).unwrap_or_default(),
+        // `serde_json::Value` already implements JSON rendering via Display.
+        Item::Array(_) | Item::Object(_) => value.to_string(),
     }
 }
 

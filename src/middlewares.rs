@@ -42,6 +42,7 @@ pub struct UserAgentMiddleware {
 }
 
 impl UserAgentMiddleware {
+    #[must_use]
     pub fn new(user_agents: Vec<String>, default: Option<String>) -> Self {
         UserAgentMiddleware {
             user_agents,
@@ -87,6 +88,7 @@ pub struct ProxyMiddleware {
 }
 
 impl ProxyMiddleware {
+    #[must_use]
     pub fn new(proxies: Vec<String>, random_selection: bool) -> Self {
         ProxyMiddleware {
             proxies,
@@ -142,6 +144,7 @@ pub struct RetryMiddleware {
 }
 
 impl RetryMiddleware {
+    #[must_use]
     pub fn new(
         max_times: u64,
         retry_http_codes: Option<Vec<u16>>,
@@ -229,6 +232,7 @@ pub struct DelayMiddleware<S: Spider> {
 }
 
 impl<S: Spider> DelayMiddleware<S> {
+    #[must_use]
     pub fn fixed(delay: f64) -> Self {
         DelayMiddleware {
             strategy: DelayStrategy::Fixed(delay),
@@ -236,6 +240,7 @@ impl<S: Spider> DelayMiddleware<S> {
         }
     }
 
+    #[must_use]
     pub fn random(min_delay: f64, max_delay: f64) -> Self {
         DelayMiddleware {
             strategy: DelayStrategy::Random(min_delay, max_delay),
@@ -243,6 +248,7 @@ impl<S: Spider> DelayMiddleware<S> {
         }
     }
 
+    #[must_use]
     pub fn custom<F>(func: F) -> Self
     where
         F: Fn(&Request<S>, &S) -> f64 + Send + Sync + 'static,
@@ -303,6 +309,7 @@ pub struct SkipNonHtmlMiddleware {
 }
 
 impl SkipNonHtmlMiddleware {
+    #[must_use]
     pub fn new(allowed_types: Option<Vec<String>>, sniff_bytes: usize) -> Self {
         SkipNonHtmlMiddleware {
             allowed_types: allowed_types.unwrap_or_else(|| vec!["html".to_string()]),
@@ -312,6 +319,7 @@ impl SkipNonHtmlMiddleware {
         }
     }
 
+    #[must_use]
     pub fn with_drop_body_on_skip(mut self, drop_body_on_skip: bool) -> Self {
         self.drop_body_on_skip = drop_body_on_skip;
         self
