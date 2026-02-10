@@ -19,9 +19,35 @@ path = "src/lib.rs"
 [[bench]]
 name = "core"
 harness = false
+required-features = ["xpath"]
+
+[[example]]
+name = "quotes_spider_xpath"
+required-features = ["xpath"]
+
+[[example]]
+name = "url_titles_spider"
+required-features = ["cli-examples"]
+
+[[example]]
+name = "export_formats_demo"
+required-features = ["cli-examples"]
+
+[[example]]
+name = "hackernews_spider"
+required-features = ["cli-examples"]
+
+[[example]]
+name = "lobsters_spider"
+required-features = ["cli-examples"]
+
+[[example]]
+name = "sitemap_spider"
+required-features = ["cli-examples"]
 
 [dependencies]
 bytes = "1.11"
+clap = { version = "4.5", features = ["derive"], optional = true }
 encoding_rs = "0.8"
 rand = "0.10.0"
 regex = "1.12"
@@ -29,16 +55,13 @@ wreq = { version = "6.0.0-rc.27", default-features = false, features = ["json", 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 scraper = "0.25"
-sxd-document = "0.3"
-sxd_html = "0.1"
-sxd-xpath = "0.4"
+sxd-document = { version = "0.3", optional = true }
+sxd_html = { version = "0.1", optional = true }
+sxd-xpath = { version = "0.4", optional = true }
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 url = "2.5"
 thiserror = "2.0.18"
 fasttime = "0.2"
-
-[dev-dependencies]
-clap = { version = "4.5", features = ["derive"] }
 
 [profile.release]
 opt-level = 3
@@ -50,3 +73,5 @@ strip = "symbols"
 [features]
 default = ["scraper-atomic"]
 scraper-atomic = ["scraper/atomic"]
+xpath = ["dep:sxd-document", "dep:sxd_html", "dep:sxd-xpath"]
+cli-examples = ["dep:clap"]

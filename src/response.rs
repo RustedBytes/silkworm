@@ -7,8 +7,11 @@ use std::sync::OnceLock;
 use bytes::Bytes;
 use encoding_rs::Encoding;
 use regex::Regex;
+#[cfg(feature = "xpath")]
 use sxd_document::dom::{Attribute, Element};
+#[cfg(feature = "xpath")]
 use sxd_xpath::nodeset::Node;
+#[cfg(feature = "xpath")]
 use sxd_xpath::{Context, Factory, Value};
 use url::Url;
 
@@ -323,19 +326,30 @@ impl<S> HtmlResponse<S> {
     }
 
     pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-        xpath_from_source(self.html_source(), selector)
+        #[cfg(feature = "xpath")]
+        {
+            return xpath_from_source(self.html_source(), selector);
+        }
+
+        #[cfg(not(feature = "xpath"))]
+        {
+            let _ = selector;
+            Err(SilkwormError::Selector(
+                "XPath support is disabled; enable the `xpath` feature".to_string(),
+            ))
+        }
     }
 
     pub fn xpath_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
-        Ok(xpath_from_source(self.html_source(), selector)?
-            .into_iter()
-            .next())
+        self.xpath(selector).map(|nodes| nodes.into_iter().next())
     }
 
+    #[cfg(feature = "xpath")]
     pub fn xpath_with(&self, xpath: &sxd_xpath::XPath) -> SilkwormResult<Vec<HtmlElement>> {
         xpath_from_source_with(self.html_source(), xpath)
     }
 
+    #[cfg(feature = "xpath")]
     pub fn xpath_first_with(
         &self,
         xpath: &sxd_xpath::XPath,
@@ -644,6 +658,7 @@ impl HtmlElement {
     }
 }
 
+#[cfg(feature = "xpath")]
 fn xpath_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
     let package = sxd_html::parse_html(source);
     let document = package.as_document();
@@ -659,6 +674,7 @@ fn xpath_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlEle
     xpath_from_source_with_document(document, &xpath)
 }
 
+#[cfg(feature = "xpath")]
 fn xpath_from_source_with(
     source: &str,
     xpath: &sxd_xpath::XPath,
@@ -668,6 +684,7 @@ fn xpath_from_source_with(
     xpath_from_source_with_document(document, xpath)
 }
 
+#[cfg(feature = "xpath")]
 fn xpath_from_source_with_document(
     document: sxd_document::dom::Document<'_>,
     xpath: &sxd_xpath::XPath,
@@ -679,6 +696,7 @@ fn xpath_from_source_with_document(
     Ok(xpath_value_to_elements(value))
 }
 
+#[cfg(feature = "xpath")]
 fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
     match value {
         Value::Nodeset(nodeset) => nodeset
@@ -704,6 +722,7 @@ fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
     }
 }
 
+#[cfg(feature = "xpath")]
 fn xpath_node_to_html(node: Node<'_>) -> String {
     match node {
         Node::Root(_) | Node::Element(_) => node_to_markup(node),
@@ -711,6 +730,7 @@ fn xpath_node_to_html(node: Node<'_>) -> String {
     }
 }
 
+#[cfg(feature = "xpath")]
 fn element_to_html(element: Element<'_>) -> String {
     let mut out = String::new();
     out.push('<');
@@ -750,6 +770,7 @@ fn select_all_selector() -> Option<&'static scraper::Selector> {
         .as_ref()
 }
 
+#[cfg(feature = "xpath")]
 fn node_to_markup(node: Node<'_>) -> String {
     match node {
         Node::Root(root) => Node::Root(root)
@@ -769,6 +790,7 @@ fn node_to_markup(node: Node<'_>) -> String {
     }
 }
 
+#[cfg(feature = "xpath")]
 fn push_element_name(out: &mut String, element: Element<'_>) {
     if let Some(prefix) = element.preferred_prefix() {
         out.push_str(prefix);
@@ -777,6 +799,7 @@ fn push_element_name(out: &mut String, element: Element<'_>) {
     out.push_str(element.name().local_part());
 }
 
+#[cfg(feature = "xpath")]
 fn push_attribute_name(out: &mut String, attribute: Attribute<'_>) {
     if let Some(prefix) = attribute.preferred_prefix() {
         out.push_str(prefix);
@@ -785,6 +808,7 @@ fn push_attribute_name(out: &mut String, attribute: Attribute<'_>) {
     out.push_str(attribute.name().local_part());
 }
 
+#[cfg(feature = "xpath")]
 fn escape_text(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -798,6 +822,7 @@ fn escape_text(input: &str) -> String {
     out
 }
 
+#[cfg(feature = "xpath")]
 fn escape_attr(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -1056,8 +1081,11 @@ mod tests {
         let anchor = html.select_first("a").expect("select").expect("anchor");
         assert_eq!(anchor.text(), "Link");
         assert_eq!(anchor.attr("href").as_deref(), Some("/x"));
-        let xpath = html.xpath_first("//a").expect("xpath").expect("node");
-        assert!(xpath.html().contains("<a"));
+        #[cfg(feature = "xpath")]
+        {
+            let xpath = html.xpath_first("//a").expect("xpath").expect("node");
+            assert!(xpath.html().contains("<a"));
+        }
     }
 
     #[test]
