@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use silkworm::{crawl_with, prelude::*};
+use silkworm::{SilkwormError, crawl_with, prelude::*};
+
+#[path = "support/mock_server.rs"]
+mod mock_server;
 
 const USER_AGENT: &str = "silkworm-rs/url-titles-spider";
 
@@ -21,7 +24,7 @@ struct UrlTitlesSpider {
 )]
 struct Args {
     #[arg(long = "urls-file", value_name = "PATH")]
-    urls_file: PathBuf,
+    urls_file: Option<PathBuf>,
     #[arg(long, value_name = "PATH", default_value = "data/url_titles.jl")]
     output: PathBuf,
 }
@@ -172,8 +175,17 @@ impl Spider for UrlTitlesSpider {
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
+    let mock = mock_server::maybe_start().await?;
     let args = Args::parse();
-    let urls_file = args.urls_file;
+    let urls_file = if let Some(path) = args.urls_file {
+        path
+    } else if let Some(server) = mock.as_ref() {
+        server.write_url_titles_file()?
+    } else {
+        return Err(SilkwormError::Config(
+            "missing --urls-file (or set SILKWORM_EXAMPLE_OFFLINE=1 for mock mode)".to_string(),
+        ));
+    };
     let output = args.output;
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<UrlTitlesSpider>>> = vec![Arc::new(

@@ -5,11 +5,16 @@ use std::time::Duration;
 
 use silkworm::{Item, SilkwormResult, crawl_with, item_from, prelude::*};
 
+#[path = "support/mock_server.rs"]
+mod mock_server;
+
 const SHORT_QUOTE_MIN_LEN: usize = 10;
 const PREVIEW_CHAR_LIMIT: usize = 50;
 const USER_AGENT: &str = "silkworm-rs/callback-pipeline-demo";
 
-struct QuotesSpider;
+struct QuotesSpider {
+    start_url: String,
+}
 
 #[derive(Debug, Serialize)]
 struct QuoteItem {
@@ -23,8 +28,8 @@ impl Spider for QuotesSpider {
         "quotes_callback"
     }
 
-    fn start_urls(&self) -> Vec<&str> {
-        vec!["https://quotes.toscrape.com/page/1/"]
+    async fn start_requests(&self) -> Vec<Request<Self>> {
+        vec![Request::get(self.start_url.clone())]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -115,6 +120,12 @@ fn enrich_item(mut item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
+    let mock = mock_server::maybe_start().await?;
+    let start_url = mock
+        .as_ref()
+        .map(|server| server.quotes_page_url(1))
+        .unwrap_or_else(|| "https://quotes.toscrape.com/page/1/".to_string());
+
     let config = RunConfig::new()
         .with_concurrency(4)
         .with_request_middleware(UserAgentMiddleware::new(
@@ -128,5 +139,5 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_request_timeout(Duration::from_secs(10))
         .with_log_stats_interval(Duration::from_secs(10))
         .with_fail_fast(true);
-    crawl_with(QuotesSpider, config).await
+    crawl_with(QuotesSpider { start_url }, config).await
 }

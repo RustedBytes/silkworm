@@ -45,6 +45,9 @@ jobs:
       - name: Run no-default-features tests
         run: cargo test --no-default-features
 
+      - name: Run examples in offline mock mode
+        run: ./scripts/run_examples_offline.sh
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

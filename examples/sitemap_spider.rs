@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use silkworm::{Response, crawl_with, prelude::*};
+use silkworm::{Response, SilkwormError, crawl_with, prelude::*};
+
+#[path = "support/mock_server.rs"]
+mod mock_server;
 
 const USER_AGENT: &str = "silkworm-rs/sitemap-spider";
 
@@ -22,7 +25,7 @@ struct SitemapSpider {
 )]
 struct Args {
     #[arg(long = "sitemap-url", value_name = "URL")]
-    sitemap_url: String,
+    sitemap_url: Option<String>,
     #[arg(long, value_name = "PATH", default_value = "data/sitemap_meta.jl")]
     output: String,
     #[arg(long, value_name = "N")]
@@ -224,8 +227,17 @@ fn extract_sitemap_urls(body: &str) -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
+    let mock = mock_server::maybe_start().await?;
     let args = Args::parse();
-    let sitemap_url = args.sitemap_url;
+    let sitemap_url = if let Some(url) = args.sitemap_url {
+        url
+    } else if let Some(server) = mock.as_ref() {
+        server.sitemap_url()
+    } else {
+        return Err(SilkwormError::Config(
+            "missing --sitemap-url (or set SILKWORM_EXAMPLE_OFFLINE=1 for mock mode)".to_string(),
+        ));
+    };
     let pages = args.pages;
     let output = args.output;
     let concurrency = args.concurrency;

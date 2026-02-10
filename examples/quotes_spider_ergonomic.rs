@@ -3,11 +3,16 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+#[path = "support/mock_server.rs"]
+mod mock_server;
+
 const USER_AGENT: &str = "silkworm-rs/quotes-ergonomic";
 
 /// Demonstrates the new ergonomic API for selecting elements.
 /// Compare this with the original quotes_spider.rs to see the improvements.
-struct QuotesSpider;
+struct QuotesSpider {
+    start_url: String,
+}
 
 #[derive(Debug, Serialize)]
 struct QuoteItem {
@@ -21,8 +26,8 @@ impl Spider for QuotesSpider {
         "quotes_ergonomic"
     }
 
-    fn start_urls(&self) -> Vec<&str> {
-        vec!["https://quotes.toscrape.com/"]
+    async fn start_requests(&self) -> Vec<Request<Self>> {
+        vec![Request::get(self.start_url.clone())]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -61,6 +66,12 @@ impl Spider for QuotesSpider {
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
+    let mock = mock_server::maybe_start().await?;
+    let start_url = mock
+        .as_ref()
+        .map(|server| server.quotes_root_url())
+        .unwrap_or_else(|| "https://quotes.toscrape.com/".to_string());
+
     let config = RunConfig::new()
         .with_request_middleware(UserAgentMiddleware::new(
             vec![],
@@ -71,5 +82,5 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_request_timeout(Duration::from_secs(10))
         .with_log_stats_interval(Duration::from_secs(10))
         .with_fail_fast(true);
-    crawl_with(QuotesSpider, config).await
+    crawl_with(QuotesSpider { start_url }, config).await
 }

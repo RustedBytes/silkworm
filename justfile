@@ -41,5 +41,8 @@ example-quotes-xpath:
 example-export pages="2":
   cargo run --example export_formats_demo --features cli-examples -- --pages {{pages}}
 
+examples-offline:
+  ./scripts/run_examples_offline.sh
+
 # Full local verification matrix.
 ci: fmt-check check test test-all-features test-no-default-features

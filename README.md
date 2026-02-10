@@ -320,6 +320,15 @@ Check out the runnable examples in `examples/`, including:
 - `examples/hackernews_spider.rs`
 - `examples/sitemap_spider.rs`
 
+Run all examples in offline mode (local mock server, CI-friendly):
+
+```bash
+SILKWORM_EXAMPLE_OFFLINE=1 ./scripts/run_examples_offline.sh
+```
+
+When `SILKWORM_EXAMPLE_OFFLINE=1` is set, examples use local deterministic
+HTML/XML fixtures instead of external websites.
+
 ## Benchmarks
 
 Run the built-in benchmark suite:

@@ -6,9 +6,13 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+#[path = "support/mock_server.rs"]
+mod mock_server;
+
 const USER_AGENT: &str = "silkworm-rs/hackernews-spider";
 
 struct HackerNewsSpider {
+    start_url: String,
     max_pages: usize,
     pages_seen: AtomicUsize,
 }
@@ -36,8 +40,9 @@ struct HackerNewsItem {
 }
 
 impl HackerNewsSpider {
-    fn new(max_pages: usize) -> Self {
+    fn new(start_url: String, max_pages: usize) -> Self {
         HackerNewsSpider {
+            start_url,
             max_pages: max_pages.max(1),
             pages_seen: AtomicUsize::new(0),
         }
@@ -49,8 +54,8 @@ impl Spider for HackerNewsSpider {
         "hacker_news_latest"
     }
 
-    fn start_urls(&self) -> Vec<&str> {
-        vec!["https://news.ycombinator.com/newest"]
+    async fn start_requests(&self) -> Vec<Request<Self>> {
+        vec![Request::get(self.start_url.clone())]
     }
 
     async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -145,6 +150,11 @@ fn extract_number(text: &str) -> Option<u64> {
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
+    let mock = mock_server::maybe_start().await?;
+    let start_url = mock
+        .as_ref()
+        .map(|server| server.hackernews_newest_url())
+        .unwrap_or_else(|| "https://news.ycombinator.com/newest".to_string());
     let pages = Args::parse().pages.max(1);
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<HackerNewsSpider>>> = vec![
@@ -165,5 +175,5 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_log_stats_interval(Duration::from_secs(10))
         .with_fail_fast(true);
 
-    crawl_with(HackerNewsSpider::new(pages), config).await
+    crawl_with(HackerNewsSpider::new(start_url, pages), config).await
 }
