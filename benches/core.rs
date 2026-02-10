@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -9,6 +11,30 @@ use sxd_xpath::Factory;
 const WARMUP_TIME: Duration = Duration::from_millis(200);
 const SAMPLE_TIME: Duration = Duration::from_millis(800);
 const HTML_MAX_SIZE_BYTES: usize = 2_000_000;
+const SELECT_CACHED_RATIO_MAX: f64 = 0.70;
+const XPATH_PRECOMPILED_RATIO_MAX: f64 = 1.20;
+const SCHEDULER_PRIORITY_HEAP_NS_MAX: f64 = 3_000_000.0;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct SchedulerEntry {
+    priority: i32,
+    sequence: u64,
+}
+
+impl Ord for SchedulerEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.priority.cmp(&other.priority) {
+            Ordering::Equal => other.sequence.cmp(&self.sequence),
+            order => order,
+        }
+    }
+}
+
+impl PartialOrd for SchedulerEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 struct BenchResult {
     name: &'static str,
@@ -70,6 +96,98 @@ fn render_results(results: &[BenchResult]) {
     }
     let total_elapsed: Duration = results.iter().map(|result| result.elapsed).sum();
     println!("total measured time: {:.2}s", total_elapsed.as_secs_f64());
+}
+
+fn benchmark_check_enabled() -> bool {
+    std::env::var("SILKWORM_BENCH_CHECK")
+        .map(|value| {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
+fn benchmark_result<'a>(results: &'a [BenchResult], name: &str) -> Option<&'a BenchResult> {
+    results.iter().find(|result| result.name == name)
+}
+
+fn check_ratio(
+    results: &[BenchResult],
+    faster_name: &str,
+    slower_name: &str,
+    max_ratio: f64,
+    failures: &mut Vec<String>,
+) {
+    let Some(faster) = benchmark_result(results, faster_name) else {
+        failures.push(format!("missing benchmark result: {faster_name}"));
+        return;
+    };
+    let Some(slower) = benchmark_result(results, slower_name) else {
+        failures.push(format!("missing benchmark result: {slower_name}"));
+        return;
+    };
+    let ratio = faster.ns_per_iter / slower.ns_per_iter.max(f64::EPSILON);
+    if ratio > max_ratio {
+        failures.push(format!(
+            "{faster_name} regression: ratio {:.3} exceeds {:.3} vs {slower_name}",
+            ratio, max_ratio
+        ));
+    }
+}
+
+fn check_max_ns(
+    results: &[BenchResult],
+    benchmark_name: &str,
+    max_ns: f64,
+    failures: &mut Vec<String>,
+) {
+    let Some(result) = benchmark_result(results, benchmark_name) else {
+        failures.push(format!("missing benchmark result: {benchmark_name}"));
+        return;
+    };
+    if result.ns_per_iter > max_ns {
+        failures.push(format!(
+            "{benchmark_name} regression: {:.2} ns/iter exceeds {:.2} ns/iter",
+            result.ns_per_iter, max_ns
+        ));
+    }
+}
+
+fn run_regression_checks(results: &[BenchResult]) -> Result<(), String> {
+    let mut failures = Vec::new();
+    check_ratio(
+        results,
+        "html_select_cached_selector",
+        "html_select_parse_each_time",
+        SELECT_CACHED_RATIO_MAX,
+        &mut failures,
+    );
+    check_ratio(
+        results,
+        "html_xpath_precompiled",
+        "html_xpath_parse_each_time",
+        XPATH_PRECOMPILED_RATIO_MAX,
+        &mut failures,
+    );
+    check_max_ns(
+        results,
+        "scheduler_priority_heap_roundtrip_2048",
+        SCHEDULER_PRIORITY_HEAP_NS_MAX,
+        &mut failures,
+    );
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+
+    let mut output = String::from("Benchmark regression thresholds failed:");
+    for failure in failures {
+        let _ = write!(output, "\n- {failure}");
+    }
+    Err(output)
 }
 
 fn make_response(body: Bytes, content_type: Option<&str>) -> Response<()> {
@@ -189,5 +307,27 @@ fn main() {
         cached_html.xpath_with(&xpath).unwrap_or_default()
     }));
 
+    results.push(run_bench("scheduler_priority_heap_roundtrip_2048", || {
+        let mut queue = BinaryHeap::with_capacity(2_048);
+        for i in 0..2_048u64 {
+            queue.push(SchedulerEntry {
+                priority: ((i % 9) as i32) - 4,
+                sequence: i,
+            });
+        }
+        let mut checksum = 0u64;
+        while let Some(entry) = queue.pop() {
+            checksum = checksum.wrapping_add(entry.sequence);
+        }
+        checksum
+    }));
+
     render_results(&results);
+
+    if benchmark_check_enabled()
+        && let Err(message) = run_regression_checks(&results)
+    {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
 }

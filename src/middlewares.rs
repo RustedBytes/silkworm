@@ -11,10 +11,8 @@ use crate::logging::get_logger;
 use crate::request::{Callback, Request};
 use crate::response::Response;
 use crate::spider::Spider;
-use crate::types::Item;
 
 pub type MiddlewareFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-pub(crate) const RETRY_DELAY_SECS_META_KEY: &str = "retry_delay_secs";
 
 pub trait RequestMiddleware<S: Spider>: Send + Sync {
     fn process_request<'a>(
@@ -131,9 +129,7 @@ impl<S: Spider> RequestMiddleware<S> for ProxyMiddleware {
                 *guard = (*guard + 1) % self.proxies.len();
                 proxy
             };
-            request
-                .meta
-                .insert("proxy".to_string(), Item::from(proxy.clone()));
+            request = request.with_proxy(proxy.clone());
             self.logger.debug("Assigned proxy", &[("proxy", proxy)]);
             request
         })
@@ -188,12 +184,7 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
                 return ResponseAction::Response(response);
             }
 
-            let retry_times = response
-                .request
-                .meta
-                .get("retry_times")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0);
+            let retry_times = response.request.retry_times();
 
             if retry_times >= self.max_times {
                 return ResponseAction::Response(response);
@@ -201,8 +192,7 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
 
             let mut req = response.request.clone();
             req.dont_filter = true;
-            req.meta
-                .insert("retry_times".to_string(), Item::from(retry_times + 1));
+            req.set_retry_times(retry_times + 1);
 
             let delay = if self.sleep_http_codes.contains(&status) && self.backoff_base > 0.0 {
                 self.backoff_base * 2f64.powi(retry_times as i32)
@@ -220,8 +210,7 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
             );
 
             if delay > 0.0 {
-                req.meta
-                    .insert(RETRY_DELAY_SECS_META_KEY.to_string(), Item::from(delay));
+                req.set_retry_delay_secs(delay);
             }
 
             ResponseAction::Request(req)
@@ -334,13 +323,7 @@ impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
         _spider: Arc<S>,
     ) -> MiddlewareFuture<'a, ResponseAction<S>> {
         Box::pin(async move {
-            if response
-                .request
-                .meta
-                .get("allow_non_html")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
+            if response.request.allow_non_html() {
                 return ResponseAction::Response(response);
             }
 
@@ -421,9 +404,8 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DelayMiddleware, ProxyMiddleware, RETRY_DELAY_SECS_META_KEY, RequestMiddleware,
-        ResponseAction, ResponseMiddleware, RetryMiddleware, SkipNonHtmlMiddleware,
-        UserAgentMiddleware,
+        DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
+        RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
     };
     use crate::request::{Request, SpiderResult};
     use crate::response::{HtmlResponse, Response};
@@ -483,18 +465,8 @@ mod tests {
             .process_request(Request::new("https://example.com"), spider)
             .await;
 
-        assert_eq!(
-            req1.meta
-                .get("proxy")
-                .and_then(|v: &serde_json::Value| v.as_str()),
-            Some("http://proxy-a")
-        );
-        assert_eq!(
-            req2.meta
-                .get("proxy")
-                .and_then(|v: &serde_json::Value| v.as_str()),
-            Some("http://proxy-b")
-        );
+        assert_eq!(req1.proxy(), Some("http://proxy-a"));
+        assert_eq!(req2.proxy(), Some("http://proxy-b"));
     }
 
     #[tokio::test]
@@ -509,11 +481,8 @@ mod tests {
         match action {
             ResponseAction::Request(req) => {
                 assert!(req.dont_filter);
-                assert_eq!(
-                    req.meta.get("retry_times").and_then(|v| v.as_u64()),
-                    Some(1)
-                );
-                assert!(!req.meta.contains_key(RETRY_DELAY_SECS_META_KEY));
+                assert_eq!(req.retry_times(), 1);
+                assert!(req.retry_delay_secs().is_none());
             }
             ResponseAction::Response(_) => panic!("expected retry request"),
         }
@@ -530,12 +499,7 @@ mod tests {
 
         match action {
             ResponseAction::Request(req) => {
-                assert_eq!(
-                    req.meta
-                        .get(RETRY_DELAY_SECS_META_KEY)
-                        .and_then(|value| value.as_f64()),
-                    Some(0.5)
-                );
+                assert_eq!(req.retry_delay_secs(), Some(0.5));
             }
             ResponseAction::Response(_) => panic!("expected retry request"),
         }

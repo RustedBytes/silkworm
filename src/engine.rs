@@ -1,6 +1,7 @@
-use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
@@ -9,16 +10,14 @@ use tokio::task::JoinSet;
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::http::HttpClient;
 use crate::logging::{Logger, complete_logs, get_logger};
-use crate::middlewares::{
-    RETRY_DELAY_SECS_META_KEY, RequestMiddleware, ResponseAction, ResponseMiddleware,
-};
+use crate::middlewares::{RequestMiddleware, ResponseAction, ResponseMiddleware};
 use crate::pipelines::ItemPipeline;
 use crate::request::{Request, SpiderOutput};
 use crate::response::Response;
 use crate::spider::Spider;
 
 struct Stats {
-    start_time: Mutex<Option<Instant>>,
+    start_time: OnceLock<Instant>,
     requests_sent: AtomicUsize,
     responses_received: AtomicUsize,
     items_scraped: AtomicUsize,
@@ -28,7 +27,7 @@ struct Stats {
 impl Stats {
     fn new() -> Self {
         Stats {
-            start_time: Mutex::new(None),
+            start_time: OnceLock::new(),
             requests_sent: AtomicUsize::new(0),
             responses_received: AtomicUsize::new(0),
             items_scraped: AtomicUsize::new(0),
@@ -37,13 +36,14 @@ impl Stats {
     }
 
     fn set_start_time(&self, when: Instant) {
-        let mut guard = self.start_time.lock().expect("stats lock");
-        *guard = Some(when);
+        let _ = self.start_time.set(when);
     }
 
     fn elapsed(&self) -> Duration {
-        let guard = self.start_time.lock().expect("stats lock");
-        guard.map(|start| start.elapsed()).unwrap_or_default()
+        self.start_time
+            .get()
+            .map(Instant::elapsed)
+            .unwrap_or_default()
     }
 }
 
@@ -133,11 +133,53 @@ impl SeenRequests {
     }
 }
 
+struct QueuedRequest<S: Spider> {
+    request: Request<S>,
+    priority: i32,
+    sequence: u64,
+}
+
+impl<S: Spider> QueuedRequest<S> {
+    fn new(request: Request<S>, sequence: u64) -> Self {
+        QueuedRequest {
+            priority: request.priority,
+            request,
+            sequence,
+        }
+    }
+}
+
+impl<S: Spider> PartialEq for QueuedRequest<S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.sequence == other.sequence
+    }
+}
+
+impl<S: Spider> Eq for QueuedRequest<S> {}
+
+impl<S: Spider> PartialOrd for QueuedRequest<S> {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<S: Spider> Ord for QueuedRequest<S> {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        match self.priority.cmp(&other.priority) {
+            CmpOrdering::Equal => other.sequence.cmp(&self.sequence),
+            order => order,
+        }
+    }
+}
+
 struct EngineState<S: Spider> {
     spider: Arc<S>,
     http: HttpClient,
-    queue_tx: mpsc::Sender<Request<S>>,
-    queue_rx: AsyncMutex<mpsc::Receiver<Request<S>>>,
+    queue_tx: mpsc::Sender<QueuedRequest<S>>,
+    queue_rx: AsyncMutex<Option<mpsc::Receiver<QueuedRequest<S>>>>,
+    ready_queue: AsyncMutex<BinaryHeap<QueuedRequest<S>>>,
+    ready_notify: Notify,
+    enqueue_sequence: AtomicU64,
     seen: AsyncMutex<SeenRequests>,
     seen_count: AtomicUsize,
     stop: AtomicBool,
@@ -195,6 +237,10 @@ fn finish_request_state<S: Spider>(state: &EngineState<S>) {
     state.pending_notify.notify_waiters();
 }
 
+fn next_queue_sequence<S: Spider>(state: &EngineState<S>) -> u64 {
+    state.enqueue_sequence.fetch_add(1, Ordering::SeqCst)
+}
+
 fn request_fingerprint<S>(req: &Request<S>) -> String {
     let method = req.method.trim().to_ascii_uppercase();
     let merged_url = crate::http::build_url_with_params(req.url.as_str(), &req.params)
@@ -203,12 +249,7 @@ fn request_fingerprint<S>(req: &Request<S>) -> String {
 }
 
 fn take_retry_delay<S>(req: &mut Request<S>) -> Option<Duration> {
-    let value = req.meta.remove(RETRY_DELAY_SECS_META_KEY)?;
-    let seconds = value.as_f64().unwrap_or(0.0);
-    if seconds <= 0.0 {
-        return None;
-    }
-    Some(Duration::from_secs_f64(seconds))
+    req.take_retry_delay_secs().map(Duration::from_secs_f64)
 }
 
 impl<S: Spider> Engine<S> {
@@ -252,7 +293,10 @@ impl<S: Spider> Engine<S> {
             spider,
             http,
             queue_tx,
-            queue_rx: AsyncMutex::new(queue_rx),
+            queue_rx: AsyncMutex::new(Some(queue_rx)),
+            ready_queue: AsyncMutex::new(BinaryHeap::new()),
+            ready_notify: Notify::new(),
+            enqueue_sequence: AtomicU64::new(0),
             seen: AsyncMutex::new(SeenRequests::new(max_seen_requests)),
             seen_count: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
@@ -279,6 +323,8 @@ impl<S: Spider> Engine<S> {
             &[("spider", self.state.spider.name().to_string())],
         );
         self.state.stats.set_start_time(Instant::now());
+
+        let mut dispatcher = self.spawn_dispatcher().await?;
 
         let mut join_set = JoinSet::new();
         for _ in 0..self.state.http.concurrency {
@@ -310,7 +356,10 @@ impl<S: Spider> Engine<S> {
                 .logger
                 .error("Failed to open spider", &[("error", err.to_string())]);
             run_error = Some(err);
-        } else if let Err(err) = self.await_idle_or_worker_health(&mut join_set).await {
+        } else if let Err(err) = self
+            .await_idle_or_worker_health(&mut join_set, &dispatcher)
+            .await
+        {
             self.state
                 .logger
                 .error("Engine stopped unexpectedly", &[("error", err.to_string())]);
@@ -326,6 +375,12 @@ impl<S: Spider> Engine<S> {
             }
         } else {
             let _ = self.join_workers(&mut join_set).await;
+        }
+
+        if let Some(err) = self.join_dispatcher(&mut dispatcher).await
+            && run_error.is_none()
+        {
+            run_error = Some(err);
         }
 
         if let Some(handle) = stats_task
@@ -423,8 +478,9 @@ impl<S: Spider> Engine<S> {
             .logger
             .debug("Enqueued request", &[("url", req.url.clone())]);
 
+        let queued = QueuedRequest::new(req, next_queue_sequence(self.state.as_ref()));
         self.state.pending.fetch_add(1, Ordering::SeqCst);
-        if let Err(err) = self.state.queue_tx.send(req).await {
+        if let Err(err) = self.state.queue_tx.send(queued).await {
             finish_request_state(self.state.as_ref());
             return Err(SilkwormError::Http(format!(
                 "Failed to enqueue request: {err}"
@@ -451,7 +507,8 @@ impl<S: Spider> Engine<S> {
                         finish_request_state(task_state.as_ref());
                         return;
                     }
-                    if let Err(err) = task_state.queue_tx.send(req).await {
+                    let queued = QueuedRequest::new(req, next_queue_sequence(task_state.as_ref()));
+                    if let Err(err) = task_state.queue_tx.send(queued).await {
                         task_state.logger.error(
                             "Failed to enqueue delayed request",
                             &[("error", err.to_string())],
@@ -469,18 +526,9 @@ impl<S: Spider> Engine<S> {
 
     async fn worker(self) {
         loop {
-            if self.state.stop.load(Ordering::SeqCst) {
+            let Some(req) = self.next_ready_request().await else {
                 break;
-            }
-
-            let req_opt = tokio::select! {
-                req = async {
-                    let mut rx = self.state.queue_rx.lock().await;
-                    rx.recv().await
-                } => req,
-                _ = self.state.stop_notify.notified() => None,
             };
-            let Some(req) = req_opt else { break };
             let mut pending_guard = PendingRequestGuard::new(self.state.clone());
 
             let result = self.process_request(req).await;
@@ -495,6 +543,54 @@ impl<S: Spider> Engine<S> {
 
             if self.state.stop.load(Ordering::SeqCst) {
                 break;
+            }
+        }
+    }
+
+    async fn spawn_dispatcher(&self) -> SilkwormResult<tokio::task::JoinHandle<()>> {
+        let mut rx_slot = self.state.queue_rx.lock().await;
+        let Some(mut receiver) = rx_slot.take() else {
+            return Err(SilkwormError::Spider(
+                "request dispatcher already started".to_string(),
+            ));
+        };
+
+        let state = self.state.clone();
+        Ok(tokio::spawn(async move {
+            loop {
+                if state.stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::select! {
+                    maybe_request = receiver.recv() => {
+                        let Some(queued) = maybe_request else { break };
+                        let mut ready = state.ready_queue.lock().await;
+                        ready.push(queued);
+                        drop(ready);
+                        state.ready_notify.notify_one();
+                    }
+                    _ = state.stop_notify.notified() => break,
+                }
+            }
+        }))
+    }
+
+    async fn next_ready_request(&self) -> Option<Request<S>> {
+        loop {
+            if self.state.stop.load(Ordering::SeqCst) {
+                return None;
+            }
+
+            if let Some(request) = {
+                let mut ready = self.state.ready_queue.lock().await;
+                ready.pop().map(|queued| queued.request)
+            } {
+                return Some(request);
+            }
+
+            tokio::select! {
+                _ = self.state.ready_notify.notified() => {}
+                _ = self.state.stop_notify.notified() => return None,
             }
         }
     }
@@ -565,11 +661,20 @@ impl<S: Spider> Engine<S> {
         }
     }
 
-    async fn await_idle_or_worker_health(&self, workers: &mut JoinSet<()>) -> SilkwormResult<()> {
+    async fn await_idle_or_worker_health(
+        &self,
+        workers: &mut JoinSet<()>,
+        dispatcher: &tokio::task::JoinHandle<()>,
+    ) -> SilkwormResult<()> {
         loop {
             self.reap_scheduled_requests().await;
             if self.state.pending.load(Ordering::SeqCst) == 0 {
                 return Ok(());
+            }
+            if dispatcher.is_finished() {
+                return Err(SilkwormError::Spider(
+                    "request dispatcher exited unexpectedly".to_string(),
+                ));
             }
 
             tokio::select! {
@@ -585,6 +690,23 @@ impl<S: Spider> Engine<S> {
                         )),
                     };
                 }
+            }
+        }
+    }
+
+    async fn join_dispatcher(
+        &self,
+        dispatcher: &mut tokio::task::JoinHandle<()>,
+    ) -> Option<SilkwormError> {
+        match dispatcher.await {
+            Ok(()) => None,
+            Err(err) => {
+                self.state
+                    .logger
+                    .error("Request dispatcher failed", &[("error", format!("{err}"))]);
+                Some(SilkwormError::Spider(format!(
+                    "request dispatcher failed: {err}"
+                )))
             }
         }
     }
@@ -680,7 +802,7 @@ impl<S: Spider> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, EngineConfig, SeenRequests, Stats, request_fingerprint};
+    use super::{Engine, EngineConfig, QueuedRequest, SeenRequests, Stats, request_fingerprint};
     use crate::errors::SilkwormError;
     use crate::middlewares::{MiddlewareFuture, RequestMiddleware};
     use crate::pipelines::{ItemPipeline, PipelineFuture};
@@ -868,6 +990,36 @@ mod tests {
         assert!(!seen.insert_if_new("https://a"));
         assert!(seen.insert_if_new("https://c"));
         assert!(seen.insert_if_new("https://a"));
+    }
+
+    #[test]
+    fn queued_requests_honor_priority_then_fifo() {
+        let mut heap = std::collections::BinaryHeap::new();
+        heap.push(QueuedRequest::new(
+            Request::<TestSpider>::new("https://example.com/low").with_priority(1),
+            0,
+        ));
+        heap.push(QueuedRequest::new(
+            Request::<TestSpider>::new("https://example.com/high-old").with_priority(3),
+            1,
+        ));
+        heap.push(QueuedRequest::new(
+            Request::<TestSpider>::new("https://example.com/high-new").with_priority(3),
+            2,
+        ));
+
+        assert_eq!(
+            heap.pop().map(|queued| queued.request.url),
+            Some("https://example.com/high-old".to_string())
+        );
+        assert_eq!(
+            heap.pop().map(|queued| queued.request.url),
+            Some("https://example.com/high-new".to_string())
+        );
+        assert_eq!(
+            heap.pop().map(|queued| queued.request.url),
+            Some("https://example.com/low".to_string())
+        );
     }
 
     #[test]

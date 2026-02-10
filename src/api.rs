@@ -1,45 +1,169 @@
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use crate::errors::{SilkwormError, SilkwormResult};
+use crate::errors::SilkwormResult;
+use crate::http::HttpClient;
+use crate::request::Request;
+use crate::types::Headers;
 
-async fn fetch_text(url: &str) -> SilkwormResult<String> {
-    static CLIENT: OnceLock<wreq::Client> = OnceLock::new();
-    let client = if let Some(client) = CLIENT.get() {
-        client.clone()
+const API_DEFAULT_CONCURRENCY: usize = 8;
+const API_DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+const API_DEFAULT_MAX_SIZE_BYTES: usize = 2_000_000;
+const API_DEFAULT_MAX_REDIRECTS: usize = 10;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UtilityFetchOptions {
+    pub concurrency: usize,
+    pub default_headers: Headers,
+    pub timeout: Option<Duration>,
+    pub html_max_size_bytes: usize,
+    pub follow_redirects: bool,
+    pub max_redirects: usize,
+    pub keep_alive: bool,
+}
+
+impl Default for UtilityFetchOptions {
+    fn default() -> Self {
+        UtilityFetchOptions {
+            concurrency: API_DEFAULT_CONCURRENCY,
+            default_headers: Headers::new(),
+            timeout: Some(API_DEFAULT_TIMEOUT),
+            html_max_size_bytes: API_DEFAULT_MAX_SIZE_BYTES,
+            follow_redirects: true,
+            max_redirects: API_DEFAULT_MAX_REDIRECTS,
+            keep_alive: false,
+        }
+    }
+}
+
+impl UtilityFetchOptions {
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
+
+    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.default_headers.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn with_headers<I, K, V>(mut self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (key, value) in headers {
+            self.default_headers.insert(key.into(), value.into());
+        }
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
+    pub fn with_html_max_size_bytes(mut self, html_max_size_bytes: usize) -> Self {
+        self.html_max_size_bytes = html_max_size_bytes;
+        self
+    }
+
+    pub fn with_follow_redirects(mut self, follow_redirects: bool) -> Self {
+        self.follow_redirects = follow_redirects;
+        self
+    }
+
+    pub fn with_max_redirects(mut self, max_redirects: usize) -> Self {
+        self.max_redirects = max_redirects;
+        self
+    }
+
+    pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
+        self.keep_alive = keep_alive;
+        self
+    }
+}
+
+fn is_default_utility_options(options: &UtilityFetchOptions) -> bool {
+    options == &UtilityFetchOptions::default()
+}
+
+fn build_client(options: &UtilityFetchOptions) -> SilkwormResult<HttpClient> {
+    HttpClient::new(
+        options.concurrency,
+        options.default_headers.clone(),
+        options.timeout,
+        options.html_max_size_bytes,
+        options.follow_redirects,
+        options.max_redirects,
+        options.keep_alive,
+    )
+}
+
+fn shared_default_client() -> SilkwormResult<HttpClient> {
+    static CLIENT: OnceLock<HttpClient> = OnceLock::new();
+    let client = if let Some(existing) = CLIENT.get() {
+        existing.clone()
     } else {
-        let built = wreq::Client::builder()
-            .redirect(wreq::redirect::Policy::none())
-            .build()
-            .map_err(|err| SilkwormError::Http(err.to_string()))?;
+        let built = build_client(&UtilityFetchOptions::default())?;
         let _ = CLIENT.set(built.clone());
         built
     };
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|err| SilkwormError::Http(err.to_string()))?;
-    let text = response
-        .text()
-        .await
-        .map_err(|err| SilkwormError::Http(err.to_string()))?;
-    Ok(text)
+    Ok(client)
+}
+
+async fn fetch_text_with_options(
+    url: &str,
+    options: &UtilityFetchOptions,
+) -> SilkwormResult<String> {
+    let client = if is_default_utility_options(options) {
+        shared_default_client()?
+    } else {
+        build_client(options)?
+    };
+    let response = client.fetch(Request::<()>::get(url)).await?;
+    Ok(response.text())
 }
 
 pub async fn fetch_html(url: &str) -> SilkwormResult<(String, scraper::Html)> {
-    let text = fetch_text(url).await?;
+    fetch_html_with(url, UtilityFetchOptions::default()).await
+}
+
+pub async fn fetch_html_with(
+    url: &str,
+    options: UtilityFetchOptions,
+) -> SilkwormResult<(String, scraper::Html)> {
+    let text = fetch_text_with_options(url, &options).await?;
     let document = scraper::Html::parse_document(&text);
     Ok((text, document))
 }
 
 pub async fn fetch_document(url: &str) -> SilkwormResult<scraper::Html> {
-    let text = fetch_text(url).await?;
+    fetch_document_with(url, UtilityFetchOptions::default()).await
+}
+
+pub async fn fetch_document_with(
+    url: &str,
+    options: UtilityFetchOptions,
+) -> SilkwormResult<scraper::Html> {
+    let text = fetch_text_with_options(url, &options).await?;
     Ok(scraper::Html::parse_document(&text))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fetch_html;
+    use super::{UtilityFetchOptions, fetch_html, fetch_html_with};
     use crate::errors::SilkwormError;
     use scraper::Selector;
     use std::io::ErrorKind;
@@ -93,6 +217,35 @@ mod tests {
         let heading = document.select(&selector).next().expect("heading");
         assert_eq!(heading.text().collect::<String>(), "Hello");
         handle.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn fetch_html_with_respects_max_size_option() {
+        let (url, handle) = match start_test_server("0123456789").await {
+            Ok(value) => value,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to start local test server: {err}"),
+        };
+
+        let options = UtilityFetchOptions::new().with_html_max_size_bytes(4);
+        let (text, _) = fetch_html_with(&url, options).await.expect("fetch html");
+
+        assert_eq!(text, "0123");
+        handle.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn fetch_html_with_rejects_zero_concurrency() {
+        let options = UtilityFetchOptions::new().with_concurrency(0);
+        let result = fetch_html_with("https://example.com", options).await;
+
+        match result {
+            Err(SilkwormError::Config(message)) => {
+                assert!(message.contains("concurrency"));
+            }
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
     }
 
     #[tokio::test]

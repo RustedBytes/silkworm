@@ -13,6 +13,7 @@ implementation in `src/` so the docs stay grounded in the code.
 - [Configuration and runtime](configuration.md)
 - [HTTP client, utility API, and logging](http-and-logging.md)
 - [Errors and shared types](errors-and-types.md)
+- [Implementation roadmap](implementation-roadmap.md)
 
 ## Module Map
 

@@ -11,7 +11,10 @@ Key settings:
 - `log_stats_interval`: optional periodic stats logging.
 - `max_pending_requests`: size of the request queue (must be greater than 0
   when set).
-- `max_seen_requests`: optional cap for the in-memory de-duplication set.
+- `max_seen_requests`: cap for the in-memory de-duplication set (defaults to
+  `100_000`).
+- `with_unbounded_seen_requests()`: disables the cap for long-running crawls
+  where full history is required.
 - `html_max_size_bytes`: maximum response body bytes buffered by the HTTP
   client and parsed into `HtmlResponse`.
 - `keep_alive`: adds `Connection: keep-alive` header when missing.

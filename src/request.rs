@@ -14,6 +14,14 @@ use crate::types::{Headers, Item, Meta, Params};
 pub type CallbackFuture<S> = Pin<Box<dyn Future<Output = SpiderResult<S>> + Send>>;
 pub type Callback<S> = Arc<dyn Fn(Arc<S>, Response<S>) -> CallbackFuture<S> + Send + Sync>;
 
+pub mod meta_keys {
+    pub const ALLOW_NON_HTML: &str = "allow_non_html";
+    pub const PROXY: &str = "proxy";
+    pub const RETRY_TIMES: &str = "retry_times";
+    pub const RETRY_DELAY_SECS: &str = "retry_delay_secs";
+    pub const REDIRECT_TIMES: &str = "redirect_times";
+}
+
 pub struct Request<S> {
     pub url: String,
     pub method: String,
@@ -164,7 +172,7 @@ impl<S> Request<S> {
 
     #[inline]
     pub fn with_allow_non_html(self, allow_non_html: bool) -> Self {
-        self.with_meta_bool("allow_non_html", allow_non_html)
+        self.with_meta_bool(meta_keys::ALLOW_NON_HTML, allow_non_html)
     }
 
     pub fn with_meta_number<N>(mut self, key: impl Into<String>, value: N) -> Self
@@ -184,6 +192,117 @@ impl<S> Request<S> {
             self.meta.insert(key.into(), value);
         }
         self
+    }
+
+    #[inline]
+    pub fn meta_value(&self, key: &str) -> Option<&Item> {
+        self.meta.get(key)
+    }
+
+    #[inline]
+    pub fn meta_str(&self, key: &str) -> Option<&str> {
+        self.meta.get(key).and_then(|value| value.as_str())
+    }
+
+    #[inline]
+    pub fn meta_bool(&self, key: &str) -> Option<bool> {
+        self.meta.get(key).and_then(|value| value.as_bool())
+    }
+
+    #[inline]
+    pub fn meta_u64(&self, key: &str) -> Option<u64> {
+        self.meta.get(key).and_then(|value| value.as_u64())
+    }
+
+    #[inline]
+    pub fn meta_f64(&self, key: &str) -> Option<f64> {
+        self.meta.get(key).and_then(|value| value.as_f64())
+    }
+
+    #[inline]
+    pub fn take_meta_u64(&mut self, key: &str) -> Option<u64> {
+        self.meta.remove(key).and_then(|value| value.as_u64())
+    }
+
+    #[inline]
+    pub fn take_meta_f64(&mut self, key: &str) -> Option<f64> {
+        self.meta.remove(key).and_then(|value| value.as_f64())
+    }
+
+    #[inline]
+    pub fn proxy(&self) -> Option<&str> {
+        self.meta_str(meta_keys::PROXY)
+    }
+
+    #[inline]
+    pub fn with_proxy(self, proxy: impl Into<String>) -> Self {
+        self.with_meta_str(meta_keys::PROXY, proxy)
+    }
+
+    #[inline]
+    pub fn allow_non_html(&self) -> bool {
+        self.meta_bool(meta_keys::ALLOW_NON_HTML).unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn retry_times(&self) -> u64 {
+        self.meta_u64(meta_keys::RETRY_TIMES).unwrap_or(0)
+    }
+
+    #[inline]
+    pub fn set_retry_times(&mut self, retry_times: u64) {
+        self.meta
+            .insert(meta_keys::RETRY_TIMES.to_string(), Item::from(retry_times));
+    }
+
+    #[inline]
+    pub fn increment_retry_times(&mut self) -> u64 {
+        let next = self.retry_times().saturating_add(1);
+        self.set_retry_times(next);
+        next
+    }
+
+    #[inline]
+    pub fn retry_delay_secs(&self) -> Option<f64> {
+        self.meta_f64(meta_keys::RETRY_DELAY_SECS)
+    }
+
+    #[inline]
+    pub fn set_retry_delay_secs(&mut self, delay_secs: f64) {
+        if delay_secs > 0.0 {
+            self.meta.insert(
+                meta_keys::RETRY_DELAY_SECS.to_string(),
+                Item::from(delay_secs),
+            );
+        } else {
+            self.meta.remove(meta_keys::RETRY_DELAY_SECS);
+        }
+    }
+
+    #[inline]
+    pub fn take_retry_delay_secs(&mut self) -> Option<f64> {
+        self.take_meta_f64(meta_keys::RETRY_DELAY_SECS)
+            .filter(|delay_secs| *delay_secs > 0.0)
+    }
+
+    #[inline]
+    pub fn redirect_times(&self) -> u64 {
+        self.meta_u64(meta_keys::REDIRECT_TIMES).unwrap_or(0)
+    }
+
+    #[inline]
+    pub fn set_redirect_times(&mut self, redirect_times: u64) {
+        self.meta.insert(
+            meta_keys::REDIRECT_TIMES.to_string(),
+            Item::from(redirect_times),
+        );
+    }
+
+    #[inline]
+    pub fn increment_redirect_times(&mut self) -> u64 {
+        let next = self.redirect_times().saturating_add(1);
+        self.set_redirect_times(next);
+        next
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -278,9 +397,10 @@ impl<S> RequestBuilder<S> {
     }
 
     pub fn allow_non_html(mut self, allow_non_html: bool) -> Self {
-        self.request
-            .meta
-            .insert("allow_non_html".to_string(), Item::Bool(allow_non_html));
+        self.request.meta.insert(
+            meta_keys::ALLOW_NON_HTML.to_string(),
+            Item::Bool(allow_non_html),
+        );
         self
     }
 
@@ -334,7 +454,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, SpiderResult, callback_from, callback_from_fn};
+    use super::{Request, SpiderResult, callback_from, callback_from_fn, meta_keys};
     use crate::response::Response;
     use crate::types::{Headers, Item};
     use bytes::Bytes;
@@ -393,6 +513,46 @@ mod tests {
     }
 
     #[test]
+    fn request_typed_meta_accessors_work() {
+        let mut req = Request::<()>::new("https://example.com")
+            .with_meta_str("trace", "abc")
+            .with_meta_bool("flag", true)
+            .with_meta_number("count", 7u64)
+            .with_meta("delay", Item::from(0.5f64));
+
+        assert_eq!(req.meta_str("trace"), Some("abc"));
+        assert_eq!(req.meta_bool("flag"), Some(true));
+        assert_eq!(req.meta_u64("count"), Some(7));
+        assert_eq!(req.meta_f64("delay"), Some(0.5));
+        assert_eq!(req.take_meta_u64("count"), Some(7));
+        assert_eq!(req.take_meta_f64("delay"), Some(0.5));
+        assert!(req.meta_u64("count").is_none());
+        assert!(req.meta_f64("delay").is_none());
+    }
+
+    #[test]
+    fn request_contract_meta_helpers_work() {
+        let mut req = Request::<()>::new("https://example.com")
+            .with_proxy("http://proxy.local:8080")
+            .with_allow_non_html(true);
+
+        assert_eq!(req.proxy(), Some("http://proxy.local:8080"));
+        assert!(req.allow_non_html());
+        assert_eq!(req.retry_times(), 0);
+        assert_eq!(req.increment_retry_times(), 1);
+        assert_eq!(req.retry_times(), 1);
+
+        req.set_retry_delay_secs(0.75);
+        assert_eq!(req.retry_delay_secs(), Some(0.75));
+        assert_eq!(req.take_retry_delay_secs(), Some(0.75));
+        assert!(req.retry_delay_secs().is_none());
+
+        assert_eq!(req.redirect_times(), 0);
+        assert_eq!(req.increment_redirect_times(), 1);
+        assert_eq!(req.redirect_times(), 1);
+    }
+
+    #[test]
     fn request_builder_sets_fields() {
         let req = Request::<()>::builder("https://example.com/search")
             .header("Accept", "text/html")
@@ -414,7 +574,7 @@ mod tests {
         assert_eq!(req.data.as_ref().map(Bytes::len), Some(3));
         assert_eq!(
             req.meta
-                .get("allow_non_html")
+                .get(meta_keys::ALLOW_NON_HTML)
                 .and_then(|value| value.as_bool()),
             Some(true)
         );
@@ -427,7 +587,7 @@ mod tests {
         let req = Request::<()>::new("https://example.com").with_allow_non_html(true);
         assert_eq!(
             req.meta
-                .get("allow_non_html")
+                .get(meta_keys::ALLOW_NON_HTML)
                 .and_then(|value| value.as_bool()),
             Some(true)
         );

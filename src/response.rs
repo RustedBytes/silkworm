@@ -58,6 +58,10 @@ impl<S> Response<S> {
     }
 
     pub fn header(&self, name: &str) -> Option<&str> {
+        let normalized = name.to_ascii_lowercase();
+        if let Some(value) = self.headers.get(&normalized) {
+            return Some(value.as_str());
+        }
         if let Some(value) = self.headers.get(name) {
             return Some(value.as_str());
         }
@@ -328,7 +332,8 @@ impl<S> HtmlResponse<S> {
     pub fn xpath(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         #[cfg(feature = "xpath")]
         {
-            xpath_from_source(self.html_source(), selector)
+            let xpath = compile_xpath(selector)?;
+            xpath_from_cached_source(self.html_source(), &xpath)
         }
 
         #[cfg(not(feature = "xpath"))]
@@ -346,7 +351,7 @@ impl<S> HtmlResponse<S> {
 
     #[cfg(feature = "xpath")]
     pub fn xpath_with(&self, xpath: &sxd_xpath::XPath) -> SilkwormResult<Vec<HtmlElement>> {
-        xpath_from_source_with(self.html_source(), xpath)
+        xpath_from_cached_source(self.html_source(), xpath)
     }
 
     #[cfg(feature = "xpath")]
@@ -354,7 +359,7 @@ impl<S> HtmlResponse<S> {
         &self,
         xpath: &sxd_xpath::XPath,
     ) -> SilkwormResult<Option<HtmlElement>> {
-        Ok(xpath_from_source_with(self.html_source(), xpath)?
+        Ok(xpath_from_cached_source(self.html_source(), xpath)?
             .into_iter()
             .next())
     }
@@ -659,33 +664,70 @@ impl HtmlElement {
 }
 
 #[cfg(feature = "xpath")]
-fn xpath_from_source(source: &str, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
-    let package = sxd_html::parse_html(source);
-    let document = package.as_document();
-
+fn compile_xpath(selector: &str) -> SilkwormResult<sxd_xpath::XPath> {
     let factory = Factory::new();
     let xpath = factory
         .build(selector)
         .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
-    let xpath = xpath.ok_or_else(|| {
+    xpath.ok_or_else(|| {
         SilkwormError::Selector("Invalid XPath selector: empty expression".to_string())
-    })?;
-
-    xpath_from_source_with_document(document, &xpath)
+    })
 }
 
 #[cfg(feature = "xpath")]
-fn xpath_from_source_with(
+const XPATH_SOURCE_CACHE_CAPACITY: usize = 8;
+
+#[cfg(feature = "xpath")]
+thread_local! {
+    static XPATH_SOURCE_CACHE: std::cell::RefCell<
+        std::collections::VecDeque<(u64, String, sxd_document::Package)>
+    > = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+#[cfg(feature = "xpath")]
+fn xpath_from_cached_source(
     source: &str,
     xpath: &sxd_xpath::XPath,
 ) -> SilkwormResult<Vec<HtmlElement>> {
-    let package = sxd_html::parse_html(source);
-    let document = package.as_document();
-    xpath_from_source_with_document(document, xpath)
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    let source_hash = hasher.finish();
+
+    XPATH_SOURCE_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+
+        if let Some(position) = cache
+            .iter()
+            .position(|(hash, cached_source, _)| *hash == source_hash && cached_source == source)
+        {
+            if position != 0
+                && let Some(entry) = cache.remove(position)
+            {
+                cache.push_front(entry);
+            }
+        } else {
+            cache.push_front((
+                source_hash,
+                source.to_string(),
+                sxd_html::parse_html(source),
+            ));
+            while cache.len() > XPATH_SOURCE_CACHE_CAPACITY {
+                cache.pop_back();
+            }
+        }
+
+        if let Some((_, _, package)) = cache.front() {
+            xpath_from_document(package.as_document(), xpath)
+        } else {
+            xpath_from_document(sxd_html::parse_html(source).as_document(), xpath)
+        }
+    })
 }
 
 #[cfg(feature = "xpath")]
-fn xpath_from_source_with_document(
+fn xpath_from_document(
     document: sxd_document::dom::Document<'_>,
     xpath: &sxd_xpath::XPath,
 ) -> SilkwormResult<Vec<HtmlElement>> {
@@ -878,6 +920,10 @@ fn decode_with_label(body: &[u8], label: &str) -> Option<(String, String)> {
 }
 
 fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option<&'a str> {
+    let normalized = name.to_ascii_lowercase();
+    if let Some(value) = headers.get(&normalized) {
+        return Some(value.as_str());
+    }
     if let Some(value) = headers.get(name) {
         return Some(value.as_str());
     }

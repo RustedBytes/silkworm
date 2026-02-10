@@ -32,8 +32,12 @@ outside of the spider engine:
 
 - `fetch_html`: returns the raw HTML text and parsed document.
 - `fetch_document`: returns only the parsed document.
+- `fetch_html_with` / `fetch_document_with`: same helpers with configurable
+  `UtilityFetchOptions`.
 
-These functions use a shared, lazily initialized `wreq::Client`.
+These functions use a shared, lazily initialized `HttpClient`.
+They apply safety defaults: 15-second timeout,
+redirect following, and a 2 MB response-body cap.
 
 Code:
 - Utility API: `../src/api.rs`
@@ -42,6 +46,44 @@ Code:
 let (html, doc) = silkworm::fetch_html("https://example.com").await?;
 let document = silkworm::fetch_document("https://example.com").await?;
 ```
+
+```rust
+use std::time::Duration;
+use silkworm::{UtilityFetchOptions, fetch_html_with};
+
+let options = UtilityFetchOptions::new()
+    .with_timeout(Duration::from_secs(8))
+    .with_html_max_size_bytes(512_000)
+    .with_header("User-Agent", "silkworm-rs/docs-example");
+let (html, doc) = fetch_html_with("https://example.com", options).await?;
+```
+
+## Header Model Evaluation
+
+The current public header type is still `HashMap<String, String>` for
+compatibility and ergonomics, but duplicate response header values are now
+normalized into merged comma-separated values.
+
+Evaluation summary:
+- Keeping `HashMap<String, String>` avoids a breaking change in `Request`,
+  `Response`, and middleware signatures.
+- `HeaderMap`-style multi-value storage would improve fidelity for
+  `Set-Cookie` and repeated headers, but would require broad API migration and
+  conversion costs across the crate.
+- Current decision: preserve the public map type for `0.1.x`; revisit a richer
+  header model in a future breaking release when API migration can be
+  coordinated.
+
+## Performance Regression Checks
+
+The benchmark harness supports optional threshold checks for selector/scheduler
+regressions:
+
+```bash
+SILKWORM_BENCH_CHECK=1 cargo bench --bench core --features xpath
+```
+
+CI runs this check in a dedicated nightly/manual benchmark job.
 
 ## Logging
 

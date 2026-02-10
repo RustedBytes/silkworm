@@ -47,12 +47,16 @@ Important fields:
 - `meta` for metadata (used by middlewares like `proxy`, `retry_times`)
 - `callback` to override the spider's `parse` method
 - `dont_filter` to bypass de-duplication (method + canonical URL)
-- `priority` (stored on the request; not used by the engine today)
+- `priority` (higher values are scheduled first; FIFO is preserved among equal priorities)
 
 Convenience APIs:
 - `Request::get`, `Request::post`
 - Builder helpers: `with_headers`, `with_params`, `with_json`, `with_meta_*`
 - `with_callback_fn` to bind async callbacks directly
+- `request::meta_keys::*` constants for middleware-related metadata keys
+- Typed metadata helpers: `meta_str`, `meta_bool`, `meta_u64`, `meta_f64`,
+  plus contract helpers such as `proxy`, `retry_times`, and
+  `take_retry_delay_secs`
 
 Code:
 - Request type and builder: `../src/request.rs`

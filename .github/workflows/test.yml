@@ -1,7 +1,19 @@
 name: Tests
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: "Run selector/scheduler benchmarks with regression thresholds"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 3 * * *"
 
 jobs:
   test:
@@ -18,5 +30,41 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets
+        run: cargo check --all-targets
+
+      - name: Run baseline tests
         run: cargo test --all
+
+      - name: Run all-features tests
+        run: cargo test --all-features
+
+      - name: Run no-default-features tests
+        run: cargo test --no-default-features
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  benchmark:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_benchmarks == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.92"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run benchmark regression checks
+        env:
+          SILKWORM_BENCH_CHECK: "1"
+        run: cargo bench --bench core --features xpath

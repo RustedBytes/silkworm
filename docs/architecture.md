@@ -8,7 +8,8 @@ request de-duplication.
 ## High-Level Flow
 
 1. The spider is opened and its start requests are generated.
-2. Requests are queued (with de-duplication unless `dont_filter` is set).
+2. Requests are de-duplicated and pushed into a priority-aware ready queue
+   (unless `dont_filter` is set).
 3. Request middlewares can enrich or rewrite requests before they are sent.
 4. Worker tasks fetch requests through the HTTP client.
 5. Response middlewares can transform the response or return a new request.
@@ -56,10 +57,11 @@ for req in self.state.spider.start_requests().await {
 ## Concurrency and Backpressure
 
 - `HttpClient` uses a semaphore to cap concurrent HTTP requests.
-- The request queue is a bounded `mpsc` channel sized by
-  `max_pending_requests` (defaults to `concurrency * 10`).
-- Enqueue operations await on the channel when it is full, providing
-  backpressure to spider callbacks and pipelines.
+- Incoming requests first go through a bounded `mpsc` channel sized by
+  `max_pending_requests` (defaults to `concurrency * 10`) to provide
+  backpressure.
+- A dispatcher task moves requests into an internal priority queue consumed by
+  workers (higher `Request.priority` first, FIFO for equal priorities).
 
 Relevant code:
 - Queue creation and config: `../src/engine.rs`

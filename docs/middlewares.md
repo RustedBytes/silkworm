@@ -42,7 +42,10 @@ Code:
 
 ### ProxyMiddleware
 
-Adds a proxy URL to `request.meta["proxy"]`. The HTTP client uses this value
+Adds a proxy URL to `request.meta["proxy"]` (`request::meta_keys::PROXY`).
+Code paths now use typed accessors (`Request::with_proxy` / `Request::proxy`)
+instead of manual `serde_json::Value` extraction.
+The HTTP client uses this value
 to build (and cache) a proxy-configured wreq client.
 
 Code:
@@ -67,17 +70,20 @@ Code:
 Retries responses based on status codes and exponential backoff.
 
 Behavior details:
-- Uses `request.meta["retry_times"]` to track attempts.
+- Uses `request.meta["retry_times"]` (`request::meta_keys::RETRY_TIMES`) to
+  track attempts via `Request::retry_times` / `Request::set_retry_times`.
 - Marks retry requests as `dont_filter` to bypass de-duplication.
 - Stores backoff delay metadata so the engine can schedule delayed retries
-  without blocking worker execution.
+  without blocking worker execution (`Request::set_retry_delay_secs`).
 
 Code:
 - `RetryMiddleware`: `../src/middlewares.rs`
 
 ### SkipNonHtmlMiddleware
 
-Skips non-HTML responses unless `request.meta["allow_non_html"]` is true.
+Skips non-HTML responses unless `request.meta["allow_non_html"]`
+(`request::meta_keys::ALLOW_NON_HTML`) is true
+(`Request::allow_non_html` helper).
 It can also drop the body to reduce memory usage and replaces the callback
 with a no-op to avoid extra parsing.
 

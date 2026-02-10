@@ -11,7 +11,7 @@ structured logging so you can focus on crawling.
 ## Features
 
 - Async engine with configurable concurrency, queue limits, and request de-dupe
-  (method + canonical URL).
+  (method + canonical URL), plus priority-aware scheduling (`Request.priority`).
 - Minimal Spider/Request/Response model with follow helpers and callback
   overrides.
 - HTML helpers for CSS and XPath (`select`, `select_first`, `xpath`,
@@ -172,6 +172,16 @@ let request = Request::get("https://example.com/api")
     .with_allow_non_html(true);
 ```
 
+Typed metadata accessors are available when middleware contracts need metadata:
+
+```rust
+let mut request = Request::get("https://example.com")
+    .with_proxy("http://proxy.local:8080");
+let proxy = request.proxy();
+let retries = request.retry_times();
+request.set_retry_delay_secs(0.5);
+```
+
 For per-request parsing, attach a callback with `with_callback_fn` or
 `callback_from_fn` (signature: `Fn(Arc<S>, Response<S>) -> SpiderResult<S>`).
 `SpiderResult<S>` is `Result<Vec<SpiderOutput<S>>, SilkwormError>`.
@@ -227,6 +237,8 @@ let config = RunConfig::new()
 ```
 
 `max_pending_requests` must be greater than `0` when set.  
+`max_seen_requests` defaults to `100_000` to bound dedupe memory usage.  
+Use `with_unbounded_seen_requests()` if you explicitly want no cap.  
 `html_max_size_bytes` also bounds how many bytes the HTTP client buffers per response.
 
 ## Logging
@@ -245,6 +257,26 @@ Fetch HTML directly and parse with [`scraper`](https://crates.io/crates/scraper)
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
     let (text, document) = silkworm::fetch_html("https://example.com").await?;
+    Ok(())
+}
+```
+
+Utility fetch helpers use safe defaults: 15s timeout, redirect following, and
+a 2 MB response-body cap.
+
+Use `UtilityFetchOptions` for per-call configuration:
+
+```rust
+use std::time::Duration;
+use silkworm::{UtilityFetchOptions, fetch_html_with};
+
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
+    let options = UtilityFetchOptions::new()
+        .with_timeout(Duration::from_secs(8))
+        .with_html_max_size_bytes(512_000)
+        .with_header("User-Agent", "silkworm-rs/readme-example");
+    let (text, document) = fetch_html_with("https://example.com", options).await?;
     Ok(())
 }
 ```
@@ -278,6 +310,12 @@ cargo bench --bench core --features="xpath"
 
 The suite measures request construction/cloning, response decoding, URL follow
 helpers, and CSS/XPath extraction (including parse-each-time vs cached paths).
+
+To run regression threshold checks (selectors + scheduler) locally:
+
+```bash
+SILKWORM_BENCH_CHECK=1 cargo bench --bench core --features="xpath"
+```
 
 ## License
 

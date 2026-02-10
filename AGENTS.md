@@ -95,7 +95,8 @@ Examples:
 
 ## Known Gotchas
 
-- `Request.priority` is stored but currently not used by engine scheduling.
+- `Request.priority` is used by engine scheduling (higher values run first;
+  FIFO order is preserved within equal priority).
 - `max_pending_requests` must be greater than zero when configured.
 - `SkipNonHtmlMiddleware` can clear body/headers and replace callback with
   no-op; parsing assumptions must account for this.

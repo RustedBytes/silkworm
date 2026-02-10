@@ -14,7 +14,9 @@ pub mod runner;
 pub mod spider;
 pub mod types;
 
-pub use api::{fetch_document, fetch_html};
+pub use api::{
+    UtilityFetchOptions, fetch_document, fetch_document_with, fetch_html, fetch_html_with,
+};
 pub use engine::Engine;
 pub use errors::{SilkwormError, SilkwormResult};
 pub use http::HttpClient;
@@ -28,7 +30,7 @@ pub use pipelines::{
 };
 pub use request::{
     Callback, CallbackFuture, Request, SpiderOutput, SpiderOutputs, SpiderResult, callback_from,
-    callback_from_fn,
+    callback_from_fn, meta_keys,
 };
 pub use response::{HtmlElement, HtmlResponse, Response};
 pub use runner::{RunConfig, crawl, crawl_with, run_spider, run_spider_with};

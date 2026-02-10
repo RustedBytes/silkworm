@@ -77,11 +77,7 @@ impl HttpClient {
             let url = self.build_url(&current_req)?;
             visited.push(url.clone());
 
-            let proxy = current_req
-                .meta
-                .get("proxy")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string());
+            let proxy = current_req.proxy().map(str::to_string);
 
             let client = if let Some(proxy_url) = &proxy {
                 self.build_client_with_proxy(proxy_url)?
@@ -320,15 +316,7 @@ fn redirect_request<S>(mut req: Request<S>, redirect_url: &str, status: u16) -> 
     req.url = redirect_url.to_string();
     req.params.clear();
 
-    let redirect_times = req
-        .meta
-        .get("redirect_times")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    req.meta.insert(
-        "redirect_times".to_string(),
-        serde_json::Value::from(redirect_times + 1),
-    );
+    req.increment_redirect_times();
 
     req
 }
@@ -337,13 +325,23 @@ fn normalize_headers(headers: &wreq::header::HeaderMap) -> Headers {
     let mut out = Headers::new();
     for (name, value) in headers.iter() {
         if let Ok(value) = value.to_str() {
-            out.insert(name.to_string().to_ascii_lowercase(), value.to_string());
+            let key = name.to_string().to_ascii_lowercase();
+            if let Some(existing) = out.get_mut(&key) {
+                existing.push_str(", ");
+                existing.push_str(value);
+            } else {
+                out.insert(key, value.to_string());
+            }
         }
     }
     out
 }
 
 fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option<&'a str> {
+    let normalized = name.to_ascii_lowercase();
+    if let Some(value) = headers.get(&normalized) {
+        return Some(value.as_str());
+    }
     if let Some(value) = headers.get(name) {
         return Some(value.as_str());
     }
@@ -439,13 +437,7 @@ mod tests {
         assert!(redirected.json.is_none());
         assert_eq!(redirected.url, "https://example.com/new");
         assert!(redirected.params.is_empty());
-        assert_eq!(
-            redirected
-                .meta
-                .get("redirect_times")
-                .and_then(|value| value.as_u64()),
-            Some(1)
-        );
+        assert_eq!(redirected.redirect_times(), 1);
     }
 
     #[test]
@@ -459,6 +451,25 @@ mod tests {
         assert_eq!(
             normalized.get("content-type").map(String::as_str),
             Some("text/html")
+        );
+    }
+
+    #[test]
+    fn normalize_headers_merges_duplicate_values() {
+        let mut headers = wreq::header::HeaderMap::new();
+        headers.append(
+            "cache-control",
+            wreq::header::HeaderValue::from_static("no-cache"),
+        );
+        headers.append(
+            "cache-control",
+            wreq::header::HeaderValue::from_static("max-age=0"),
+        );
+
+        let normalized = normalize_headers(&headers);
+        assert_eq!(
+            normalized.get("cache-control").map(String::as_str),
+            Some("no-cache, max-age=0")
         );
     }
 

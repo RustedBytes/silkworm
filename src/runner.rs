@@ -7,6 +7,8 @@ use crate::middlewares::{RequestMiddleware, ResponseMiddleware};
 use crate::pipelines::ItemPipeline;
 use crate::spider::Spider;
 
+const DEFAULT_MAX_SEEN_REQUESTS: usize = 100_000;
+
 pub struct RunConfig<S: Spider> {
     pub concurrency: usize,
     pub request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
@@ -30,7 +32,7 @@ impl<S: Spider> Default for RunConfig<S> {
             request_timeout: None,
             log_stats_interval: None,
             max_pending_requests: None,
-            max_seen_requests: None,
+            max_seen_requests: Some(DEFAULT_MAX_SEEN_REQUESTS),
             html_max_size_bytes: 5_000_000,
             keep_alive: false,
         }
@@ -89,6 +91,11 @@ impl<S: Spider> RunConfig<S> {
 
     pub fn with_max_seen_requests(mut self, max_seen_requests: usize) -> Self {
         self.max_seen_requests = Some(max_seen_requests);
+        self
+    }
+
+    pub fn with_unbounded_seen_requests(mut self) -> Self {
+        self.max_seen_requests = None;
         self
     }
 
@@ -165,7 +172,7 @@ pub fn run_spider_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormRe
 
 #[cfg(test)]
 mod tests {
-    use super::RunConfig;
+    use super::{DEFAULT_MAX_SEEN_REQUESTS, RunConfig};
     use crate::engine::EngineConfig;
     use crate::middlewares::{
         RequestMiddleware, ResponseMiddleware, RetryMiddleware, UserAgentMiddleware,
@@ -197,7 +204,7 @@ mod tests {
         assert!(config.request_timeout.is_none());
         assert!(config.log_stats_interval.is_none());
         assert!(config.max_pending_requests.is_none());
-        assert!(config.max_seen_requests.is_none());
+        assert_eq!(config.max_seen_requests, Some(DEFAULT_MAX_SEEN_REQUESTS));
     }
 
     #[test]
@@ -254,6 +261,12 @@ mod tests {
         assert_eq!(config.max_seen_requests, Some(48));
         assert_eq!(config.html_max_size_bytes, 321);
         assert!(config.keep_alive);
+    }
+
+    #[test]
+    fn run_config_can_disable_seen_requests_bound() {
+        let config = RunConfig::<TestSpider>::new().with_unbounded_seen_requests();
+        assert!(config.max_seen_requests.is_none());
     }
 
     #[test]
