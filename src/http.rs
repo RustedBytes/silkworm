@@ -601,7 +601,8 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.url, url);
+        let normalized_url = url::Url::parse(&url).expect("parse url").to_string();
+        assert_eq!(response.url, normalized_url);
         assert_eq!(response.body.as_ref(), b"0123");
         handle.await.expect("server task");
     }
