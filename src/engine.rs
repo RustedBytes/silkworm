@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, watch};
 use tokio::task::JoinSet;
 
 use crate::errors::{SilkwormError, SilkwormResult};
@@ -16,8 +16,6 @@ use crate::request::{Request, SpiderOutput};
 use crate::response::Response;
 use crate::spider::Spider;
 use crate::types::Item;
-
-const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct Stats {
     start_time: OnceLock<Instant>,
@@ -99,6 +97,7 @@ pub struct EngineConfig<S: Spider> {
     pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
     pub keep_alive: bool,
+    pub fail_fast: bool,
 }
 
 struct SeenRequests {
@@ -188,11 +187,12 @@ struct EngineState<S: Spider> {
     seen: AsyncMutex<SeenRequests>,
     seen_count: AtomicUsize,
     stop: AtomicBool,
+    stop_tx: watch::Sender<bool>,
+    stop_rx: watch::Receiver<bool>,
     pending: AtomicUsize,
     pending_notify: Notify,
     item_pending: AtomicUsize,
     item_pending_notify: Notify,
-    stop_notify: Notify,
     request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
     response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
     item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
@@ -200,6 +200,9 @@ struct EngineState<S: Spider> {
     stats: Stats,
     logger: Logger,
     html_max_size_bytes: usize,
+    fail_fast: bool,
+    fatal_error: AsyncMutex<Option<SilkwormError>>,
+    fatal_error_notify: Notify,
     scheduled_requests: AsyncMutex<JoinSet<()>>,
 }
 
@@ -253,6 +256,20 @@ fn finish_item_state<S: Spider>(state: &EngineState<S>) {
     state.item_pending_notify.notify_waiters();
 }
 
+fn signal_stop_state<S: Spider>(state: &EngineState<S>) {
+    state.stop.store(true, Ordering::SeqCst);
+    let _ = state.stop_tx.send(true);
+}
+
+async fn record_fatal_error_state<S: Spider>(state: &EngineState<S>, err: SilkwormError) {
+    let mut slot = state.fatal_error.lock().await;
+    if slot.is_none() {
+        *slot = Some(err);
+        drop(slot);
+        state.fatal_error_notify.notify_waiters();
+    }
+}
+
 fn next_queue_sequence<S: Spider>(state: &EngineState<S>) -> u64 {
     state.enqueue_sequence.fetch_add(1, Ordering::SeqCst)
 }
@@ -285,6 +302,7 @@ impl<S: Spider> Engine<S> {
             max_seen_requests,
             html_max_size_bytes,
             keep_alive,
+            fail_fast,
         } = config;
         if max_seen_requests == Some(0) {
             return Err(SilkwormError::Config(
@@ -299,6 +317,7 @@ impl<S: Spider> Engine<S> {
         let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
         let (queue_tx, queue_rx) = mpsc::channel(queue_size);
         let (item_tx, item_rx) = mpsc::channel(queue_size);
+        let (stop_tx, stop_rx) = watch::channel(false);
         let http = HttpClient::new(
             concurrency,
             crate::types::Headers::new(),
@@ -323,11 +342,12 @@ impl<S: Spider> Engine<S> {
             seen: AsyncMutex::new(SeenRequests::new(max_seen_requests)),
             seen_count: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
+            stop_tx,
+            stop_rx,
             pending: AtomicUsize::new(0),
             pending_notify: Notify::new(),
             item_pending: AtomicUsize::new(0),
             item_pending_notify: Notify::new(),
-            stop_notify: Notify::new(),
             request_middlewares,
             response_middlewares,
             item_pipelines,
@@ -335,6 +355,9 @@ impl<S: Spider> Engine<S> {
             stats: Stats::new(),
             logger,
             html_max_size_bytes,
+            fail_fast,
+            fatal_error: AsyncMutex::new(None),
+            fatal_error_notify: Notify::new(),
             scheduled_requests: AsyncMutex::new(JoinSet::new()),
         };
         Ok(Engine {
@@ -383,7 +406,7 @@ impl<S: Spider> Engine<S> {
                 .error("Failed to open spider", &[("error", err.to_string())]);
             run_error = Some(err);
         } else if let Err(err) = self
-            .await_idle_or_worker_health(&mut join_set, &dispatcher, &mut item_worker)
+            .await_idle_or_worker_health(&mut join_set, &dispatcher, &item_worker)
             .await
         {
             self.state
@@ -531,6 +554,7 @@ impl<S: Spider> Engine<S> {
 
         let state = self.state.clone();
         let task_state = state.clone();
+        let mut stop_rx = task_state.stop_rx.clone();
         let mut scheduled = state.scheduled_requests.lock().await;
         scheduled.spawn(async move {
             tokio::select! {
@@ -548,7 +572,7 @@ impl<S: Spider> Engine<S> {
                         finish_request_state(task_state.as_ref());
                     }
                 }
-                _ = task_state.stop_notify.notified() => {
+                _ = stop_rx.changed() => {
                     finish_request_state(task_state.as_ref());
                 }
             }
@@ -577,9 +601,16 @@ impl<S: Spider> Engine<S> {
             let result = self.process_request(req).await;
             if let Err(err) = result {
                 self.state.stats.errors.fetch_add(1, Ordering::SeqCst);
+                let error_text = err.to_string();
                 self.state
                     .logger
-                    .error("Failed to process request", &[("error", err.to_string())]);
+                    .error("Failed to process request", &[("error", error_text)]);
+                if self.state.fail_fast {
+                    record_fatal_error_state(self.state.as_ref(), err).await;
+                    pending_guard.finish();
+                    self.shutdown().await;
+                    break;
+                }
             }
 
             pending_guard.finish();
@@ -600,6 +631,7 @@ impl<S: Spider> Engine<S> {
 
         let state = self.state.clone();
         Ok(tokio::spawn(async move {
+            let mut stop_rx = state.stop_rx.clone();
             loop {
                 if state.stop.load(Ordering::SeqCst) {
                     break;
@@ -612,8 +644,11 @@ impl<S: Spider> Engine<S> {
                         drop(ready);
                         state.ready_notify.notify_one();
                     }
-                    _ = state.stop_notify.notified() => break,
-                    _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
+                    _ = stop_rx.changed() => {
+                        if *stop_rx.borrow() {
+                            break;
+                        }
+                    }
                 }
             }
         }))
@@ -629,6 +664,7 @@ impl<S: Spider> Engine<S> {
 
         let state = self.state.clone();
         Ok(tokio::spawn(async move {
+            let mut stop_rx = state.stop_rx.clone();
             loop {
                 if state.stop.load(Ordering::SeqCst) {
                     while receiver.try_recv().is_ok() {
@@ -640,34 +676,44 @@ impl<S: Spider> Engine<S> {
                     maybe_item = receiver.recv() => {
                         let Some(item) = maybe_item else { break };
                         let mut current = item;
+                        let mut stop_after_item = false;
                         for pipe in &state.item_pipelines {
                             match pipe.process_item(current, state.spider.clone()).await {
                                 Ok(next) => current = next,
                                 Err(err) => {
                                     state.stats.errors.fetch_add(1, Ordering::SeqCst);
+                                    let error_text = err.to_string();
                                     state.logger.error(
                                         "Failed to process item",
-                                        &[("error", err.to_string())],
+                                        &[("error", error_text)],
                                     );
+                                    if state.fail_fast {
+                                        record_fatal_error_state(state.as_ref(), err).await;
+                                        stop_after_item = true;
+                                    }
                                     break;
                                 }
                             }
                         }
                         finish_item_state(state.as_ref());
+                        if stop_after_item {
+                            signal_stop_state(state.as_ref());
+                            break;
+                        }
                     }
-                    _ = state.stop_notify.notified() => {
+                    _ = stop_rx.changed() => {
                         while receiver.try_recv().is_ok() {
                             finish_item_state(state.as_ref());
                         }
                         break;
                     }
-                    _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
                 }
             }
         }))
     }
 
     async fn next_ready_request(&self) -> Option<Request<S>> {
+        let mut stop_rx = self.state.stop_rx.clone();
         loop {
             if self.state.stop.load(Ordering::SeqCst) {
                 return None;
@@ -682,8 +728,11 @@ impl<S: Spider> Engine<S> {
 
             tokio::select! {
                 _ = self.state.ready_notify.notified() => {}
-                _ = self.state.stop_notify.notified() => return None,
-                _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
+                _ = stop_rx.changed() => {
+                    if *stop_rx.borrow() {
+                        return None;
+                    }
+                }
             }
         }
     }
@@ -759,10 +808,13 @@ impl<S: Spider> Engine<S> {
         &self,
         workers: &mut JoinSet<()>,
         dispatcher: &tokio::task::JoinHandle<()>,
-        item_worker: &mut tokio::task::JoinHandle<()>,
+        item_worker: &tokio::task::JoinHandle<()>,
     ) -> SilkwormResult<()> {
         loop {
             self.reap_scheduled_requests().await;
+            if let Some(err) = self.take_fatal_error().await {
+                return Err(err);
+            }
             if self.state.pending.load(Ordering::SeqCst) == 0
                 && self.state.item_pending.load(Ordering::SeqCst) == 0
             {
@@ -782,7 +834,15 @@ impl<S: Spider> Engine<S> {
             tokio::select! {
                 _ = self.state.pending_notify.notified() => {}
                 _ = self.state.item_pending_notify.notified() => {}
+                _ = self.state.fatal_error_notify.notified() => {
+                    if let Some(err) = self.take_fatal_error().await {
+                        return Err(err);
+                    }
+                }
                 worker = workers.join_next() => {
+                    if let Some(err) = self.take_fatal_error().await {
+                        return Err(err);
+                    }
                     return match worker {
                         Some(Ok(())) => Err(SilkwormError::Spider(
                             "worker task exited unexpectedly".to_string(),
@@ -791,14 +851,6 @@ impl<S: Spider> Engine<S> {
                         None => Err(SilkwormError::Spider(
                             "all worker tasks exited unexpectedly".to_string(),
                         )),
-                    };
-                }
-                item = &mut *item_worker => {
-                    return match item {
-                        Ok(()) => Err(SilkwormError::Spider(
-                            "item worker exited unexpectedly".to_string(),
-                        )),
-                        Err(err) => Err(SilkwormError::Spider(format!("item worker failed: {err}"))),
                     };
                 }
             }
@@ -852,6 +904,11 @@ impl<S: Spider> Engine<S> {
         }
     }
 
+    async fn take_fatal_error(&self) -> Option<SilkwormError> {
+        let mut slot = self.state.fatal_error.lock().await;
+        slot.take()
+    }
+
     async fn reap_scheduled_requests(&self) {
         let mut scheduled = self.state.scheduled_requests.lock().await;
         while let Some(res) = scheduled.try_join_next() {
@@ -870,12 +927,12 @@ impl<S: Spider> Engine<S> {
     }
 
     async fn shutdown(&self) {
-        self.state.stop.store(true, Ordering::SeqCst);
-        self.state.stop_notify.notify_waiters();
+        signal_stop_state(self.state.as_ref());
     }
 
     async fn log_statistics(self, interval: Duration) {
         let mut ticker = tokio::time::interval(interval);
+        let mut stop_rx = self.state.stop_rx.clone();
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
@@ -886,7 +943,11 @@ impl<S: Spider> Engine<S> {
                         .logger
                         .info("Crawl statistics", &self.stats_payload());
                 }
-                _ = self.state.stop_notify.notified() => break,
+                _ = stop_rx.changed() => {
+                    if *stop_rx.borrow() {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -963,6 +1024,22 @@ mod tests {
 
         fn start_urls(&self) -> Vec<&str> {
             vec!["https://example.com"]
+        }
+
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct InvalidUrlSpider;
+
+    impl Spider for InvalidUrlSpider {
+        fn name(&self) -> &str {
+            "invalid-url"
+        }
+
+        fn start_urls(&self) -> Vec<&str> {
+            vec!["http://[::1"]
         }
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
@@ -1057,6 +1134,7 @@ mod tests {
             max_seen_requests: None,
             html_max_size_bytes: 1,
             keep_alive: false,
+            fail_fast: false,
         };
         let result = Engine::new(TestSpider, config);
         match result {
@@ -1079,6 +1157,7 @@ mod tests {
             max_seen_requests: Some(0),
             html_max_size_bytes: 1,
             keep_alive: false,
+            fail_fast: false,
         };
         let result = Engine::new(TestSpider, config);
         match result {
@@ -1101,6 +1180,7 @@ mod tests {
             max_seen_requests: None,
             html_max_size_bytes: 1,
             keep_alive: false,
+            fail_fast: false,
         };
         let result = Engine::new(TestSpider, config);
         match result {
@@ -1174,6 +1254,64 @@ mod tests {
         assert_ne!(request_fingerprint(&req_a), request_fingerprint(&req_c));
     }
 
+    #[test]
+    fn request_fingerprint_ignores_fragment() {
+        let req_a = Request::<()>::new("https://example.com/search?q=rust#top");
+        let req_b = Request::<()>::new("https://example.com/search?q=rust#bottom");
+
+        assert_eq!(request_fingerprint(&req_a), request_fingerprint(&req_b));
+    }
+
+    #[tokio::test]
+    async fn run_with_fail_fast_disabled_continues_after_request_error() {
+        let config = EngineConfig::<InvalidUrlSpider> {
+            concurrency: 1,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            max_seen_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+            fail_fast: false,
+        };
+        let engine = Engine::new(InvalidUrlSpider, config).expect("engine");
+
+        let run_result = tokio::time::timeout(Duration::from_secs(1), engine.run()).await;
+        assert!(run_result.is_ok(), "engine.run timed out");
+        assert!(run_result.expect("timeout result").is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_with_fail_fast_enabled_returns_first_request_error() {
+        let config = EngineConfig::<InvalidUrlSpider> {
+            concurrency: 1,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            max_seen_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+            fail_fast: true,
+        };
+        let engine = Engine::new(InvalidUrlSpider, config).expect("engine");
+
+        let run_result = tokio::time::timeout(Duration::from_secs(1), engine.run()).await;
+        assert!(run_result.is_ok(), "engine.run timed out");
+        match run_result.expect("timeout result") {
+            Err(SilkwormError::Http(message)) => {
+                assert!(message.contains("Invalid URL"));
+            }
+            Err(other) => panic!("expected http error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
     #[tokio::test]
     async fn run_returns_error_when_worker_panics() {
         let config = EngineConfig::<StartSpider> {
@@ -1187,6 +1325,7 @@ mod tests {
             max_seen_requests: None,
             html_max_size_bytes: 1,
             keep_alive: false,
+            fail_fast: false,
         };
         let engine = Engine::new(StartSpider, config).expect("engine");
 
@@ -1224,6 +1363,7 @@ mod tests {
             max_seen_requests: None,
             html_max_size_bytes: 1,
             keep_alive: false,
+            fail_fast: false,
         };
 
         let engine = Engine::new(spider, config).expect("engine");

@@ -15,7 +15,8 @@ request de-duplication.
 5. Response middlewares can transform the response or return a new request.
 6. The response is parsed via a callback or the spider's `parse` method.
 7. Outputs are turned into new requests or items, then re-queued or piped.
-8. When the queue drains and no requests are pending, the engine shuts down.
+8. When the queue drains and no requests are pending, the engine shuts down
+   (or earlier when `fail_fast` is enabled and an error occurs).
 
 Implementation entry points:
 - Engine and core loop: `../src/engine.rs`
@@ -24,7 +25,7 @@ Implementation entry points:
 ```rust
 // Engine startup (simplified)
 self.open_spider().await?;
-self.await_idle().await;
+self.await_idle_or_worker_health(...).await?;
 self.shutdown().await;
 ```
 

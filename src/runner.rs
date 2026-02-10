@@ -20,6 +20,7 @@ pub struct RunConfig<S: Spider> {
     pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
     pub keep_alive: bool,
+    pub fail_fast: bool,
 }
 
 impl<S: Spider> Default for RunConfig<S> {
@@ -35,6 +36,7 @@ impl<S: Spider> Default for RunConfig<S> {
             max_seen_requests: Some(DEFAULT_MAX_SEEN_REQUESTS),
             html_max_size_bytes: 5_000_000,
             keep_alive: false,
+            fail_fast: false,
         }
     }
 }
@@ -109,6 +111,11 @@ impl<S: Spider> RunConfig<S> {
         self
     }
 
+    pub fn with_fail_fast(mut self, fail_fast: bool) -> Self {
+        self.fail_fast = fail_fast;
+        self
+    }
+
     pub fn with_middlewares<Req, Resp>(
         mut self,
         request_middlewares: Req,
@@ -137,6 +144,7 @@ impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
             max_seen_requests: config.max_seen_requests,
             html_max_size_bytes: config.html_max_size_bytes,
             keep_alive: config.keep_alive,
+            fail_fast: config.fail_fast,
         }
     }
 }
@@ -201,6 +209,7 @@ mod tests {
         assert_eq!(config.concurrency, 16);
         assert_eq!(config.html_max_size_bytes, 5_000_000);
         assert!(!config.keep_alive);
+        assert!(!config.fail_fast);
         assert!(config.request_timeout.is_none());
         assert!(config.log_stats_interval.is_none());
         assert!(config.max_pending_requests.is_none());
@@ -220,6 +229,7 @@ mod tests {
             max_seen_requests: Some(11),
             html_max_size_bytes: 123,
             keep_alive: true,
+            fail_fast: true,
         };
         let engine_config: EngineConfig<TestSpider> = config.into();
         assert_eq!(engine_config.concurrency, 3);
@@ -235,6 +245,7 @@ mod tests {
         assert_eq!(engine_config.max_seen_requests, Some(11));
         assert_eq!(engine_config.html_max_size_bytes, 123);
         assert!(engine_config.keep_alive);
+        assert!(engine_config.fail_fast);
     }
 
     #[test]
@@ -246,7 +257,8 @@ mod tests {
             .with_max_pending_requests(12)
             .with_max_seen_requests(48)
             .with_html_max_size_bytes(321)
-            .with_keep_alive(true);
+            .with_keep_alive(true)
+            .with_fail_fast(true);
 
         assert_eq!(config.concurrency, 8);
         assert_eq!(
@@ -261,6 +273,7 @@ mod tests {
         assert_eq!(config.max_seen_requests, Some(48));
         assert_eq!(config.html_max_size_bytes, 321);
         assert!(config.keep_alive);
+        assert!(config.fail_fast);
     }
 
     #[test]

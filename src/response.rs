@@ -1026,7 +1026,7 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
 
     static META_CHARSET_RE: OnceLock<Regex> = OnceLock::new();
     let meta_charset = META_CHARSET_RE.get_or_init(|| {
-        Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#)
+        Regex::new(r#"(?i)<meta\s+charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)['"]?"#)
             .expect("meta charset regex")
     });
     if let Some(caps) = meta_charset.captures(&head) {
@@ -1036,7 +1036,7 @@ fn encoding_from_meta(body: &[u8]) -> Option<String> {
     static META_CONTENT_TYPE_RE: OnceLock<Regex> = OnceLock::new();
     let meta_content_type = META_CONTENT_TYPE_RE.get_or_init(|| {
         Regex::new(
-            r#"(?i)<meta\s+http-equiv\s*=\s*['"]?content-type['"]?[^>]*charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)"#,
+            r#"(?i)<meta\s+http-equiv\s*=\s*['"]?content-type['"]?[^>]*charset\s*=\s*['"]?([a-zA-Z0-9._:-]+)['"]?"#,
         )
         .expect("meta content-type regex")
     });
@@ -1088,7 +1088,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::Response;
+    use super::{Response, encoding_from_meta};
     use crate::request::{Request, SpiderOutput, SpiderResult, callback_from_fn};
     use crate::types::Headers;
     use bytes::Bytes;
@@ -1197,6 +1197,22 @@ mod tests {
         assert_eq!(response.header("content-type"), Some("text/html"));
         assert_eq!(response.header("X-TRACE"), Some("abc"));
         assert_eq!(response.content_type(), Some("text/html"));
+    }
+
+    #[test]
+    fn encoding_from_meta_accepts_single_quoted_charset() {
+        let body =
+            br#"<html><head><meta charset='windows-1252'></head><body>caf\xe9</body></html>"#;
+        let encoding = encoding_from_meta(body);
+        assert_eq!(encoding.as_deref(), Some("windows-1252"));
+    }
+
+    #[test]
+    fn encoding_from_meta_accepts_unquoted_content_type_charset() {
+        let body =
+            br#"<html><head><meta http-equiv='content-type' content='text/html; charset=iso-8859-1'></head></html>"#;
+        let encoding = encoding_from_meta(body);
+        assert_eq!(encoding.as_deref(), Some("iso-8859-1"));
     }
 
     #[test]

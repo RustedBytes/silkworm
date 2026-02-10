@@ -12,6 +12,7 @@ structured logging so you can focus on crawling.
 
 - Async engine with configurable concurrency, queue limits, and request de-dupe
   (method + canonical URL), plus priority-aware scheduling (`Request.priority`).
+- Optional `fail_fast` mode to stop on first processing error.
 - Minimal Spider/Request/Response model with follow helpers and callback
   overrides.
 - HTML helpers for CSS and XPath (`select`, `select_first`, `xpath`,
@@ -230,6 +231,7 @@ let config = RunConfig::new()
     .with_concurrency(32)
     .with_max_pending_requests(500)
     .with_max_seen_requests(50_000)
+    .with_fail_fast(true)
     .with_log_stats_interval(Duration::from_secs(10))
     .with_request_timeout(Duration::from_secs(10))
     .with_html_max_size_bytes(2_000_000)

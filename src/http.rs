@@ -231,10 +231,14 @@ impl HttpClient {
 
 pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
     if params.is_empty() {
-        return Ok(url.to_string());
+        let mut parsed = Url::parse(url)
+            .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+        parsed.set_fragment(None);
+        return Ok(parsed.to_string());
     }
     let mut parsed = Url::parse(url)
         .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+    parsed.set_fragment(None);
 
     let merged = merged_query_pairs(&parsed, params);
 
@@ -252,6 +256,7 @@ pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResul
 pub(crate) fn canonical_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
     let mut parsed = Url::parse(url)
         .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+    parsed.set_fragment(None);
     let mut merged = merged_query_pairs(&parsed, params);
     merged.sort();
 
@@ -460,6 +465,17 @@ mod tests {
     }
 
     #[test]
+    fn build_url_strips_fragment() {
+        let client =
+            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
+        let req = Request::<()>::new("https://example.com/path?x=1#section");
+        let built = client.build_url(&req).expect("build url");
+
+        assert!(!built.contains('#'));
+        assert_eq!(built, "https://example.com/path?x=1");
+    }
+
+    #[test]
     fn canonical_url_sorts_query_pairs_without_dropping_duplicates() {
         let params = [("z".to_string(), "9".to_string())]
             .into_iter()
@@ -478,6 +494,18 @@ mod tests {
                 ("z".to_string(), "9".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn canonical_url_ignores_fragment() {
+        let params = crate::types::Params::new();
+        let first = canonical_url_with_params("https://example.com/path?x=1#top", &params)
+            .expect("canonical #1");
+        let second = canonical_url_with_params("https://example.com/path?x=1#bottom", &params)
+            .expect("canonical #2");
+
+        assert_eq!(first, second);
+        assert_eq!(first, "https://example.com/path?x=1");
     }
 
     #[test]

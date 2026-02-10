@@ -18,6 +18,7 @@ Key settings:
 - `html_max_size_bytes`: maximum response body bytes buffered by the HTTP
   client and parsed into `HtmlResponse`.
 - `keep_alive`: adds `Connection: keep-alive` header when missing.
+- `fail_fast`: stop the crawl on the first request/parse/pipeline error.
 - `request_middlewares`, `response_middlewares`, `item_pipelines`.
 
 Code:
@@ -31,6 +32,7 @@ let config = RunConfig::new()
     .with_concurrency(32)
     .with_max_seen_requests(50_000)
     .with_request_timeout(Duration::from_secs(10))
+    .with_fail_fast(true)
     .with_request_middleware(UserAgentMiddleware::new(
         vec![],
         Some("silkworm-rs/docs-example".to_string()),

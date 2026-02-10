@@ -90,6 +90,15 @@ Evaluation summary:
   header model in a future breaking release when API migration can be
   coordinated.
 
+Planned migration path for `0.2`:
+1. Introduce a multi-value header type in parallel (for example,
+   `HashMap<String, Vec<String>>`) and conversion helpers from/to the current
+   map.
+2. Add `Response` helpers for repeated headers (for example cookies) while
+   keeping existing `header()` compatibility APIs during transition.
+3. Migrate middleware and utility APIs to the richer type behind a feature flag
+   first, then make it default in the `0.2` breaking release.
+
 ## Performance Regression Checks
 
 The benchmark harness supports optional threshold checks for selector/scheduler
