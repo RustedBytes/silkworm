@@ -82,14 +82,17 @@ impl<S> Request<S> {
         }
     }
 
+    #[inline]
     pub fn builder(url: impl Into<String>) -> RequestBuilder<S> {
         RequestBuilder::new(url)
     }
 
+    #[inline]
     pub fn get(url: impl Into<String>) -> Self {
         Self::new(url)
     }
 
+    #[inline]
     pub fn post(url: impl Into<String>) -> Self {
         Self::new(url).with_method("POST")
     }
@@ -158,6 +161,7 @@ impl<S> Request<S> {
         self
     }
 
+    #[inline]
     pub fn with_allow_non_html(self, allow_non_html: bool) -> Self {
         self.with_meta_bool("allow_non_html", allow_non_html)
     }
@@ -279,6 +283,7 @@ impl<S> RequestBuilder<S> {
         self
     }
 
+    #[inline]
     pub fn build(self) -> Request<S> {
         self.request
     }
@@ -316,6 +321,7 @@ where
     })
 }
 
+#[inline]
 pub fn callback_from_fn<S, Fut>(func: fn(Arc<S>, Response<S>) -> Fut) -> Callback<S>
 where
     S: Send + Sync + 'static,

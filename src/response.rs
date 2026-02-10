@@ -64,6 +64,7 @@ impl<S> Response<S> {
             .map(|(_, value)| value.as_str())
     }
 
+    #[inline]
     pub fn content_type(&self) -> Option<&str> {
         self.header("content-type")
     }
@@ -85,6 +86,7 @@ impl<S> Response<S> {
         req
     }
 
+    #[inline]
     pub fn follow_url(&self, href: &str) -> Request<S> {
         self.follow(href, None)
     }
@@ -161,7 +163,8 @@ impl<S> Response<S> {
         if snippet.is_empty() {
             return false;
         }
-        contains_html_marker(snippet)
+        contains_ascii_case_insensitive(snippet, b"<html")
+            || contains_ascii_case_insensitive(snippet, b"<!doctype")
     }
 
     pub fn close(&mut self) {
@@ -309,10 +312,12 @@ impl<S> HtmlResponse<S> {
             .collect()
     }
 
+    #[inline]
     pub fn css(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         self.select(selector)
     }
 
+    #[inline]
     pub fn css_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         self.select_first(selector)
     }
@@ -342,36 +347,42 @@ impl<S> HtmlResponse<S> {
 
     /// Select elements matching a CSS selector, returning an empty vector on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn select_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
         self.select(selector).unwrap_or_default()
     }
 
     /// Select the first element matching a CSS selector, returning None on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn select_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
         self.select_first(selector).ok().flatten()
     }
 
     /// Select elements matching a CSS selector, returning an empty vector on error.
     /// Alias for `select_or_empty`.
+    #[inline]
     pub fn css_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
         self.select_or_empty(selector)
     }
 
     /// Select the first element matching a CSS selector, returning None on error.
     /// Alias for `select_first_or_none`.
+    #[inline]
     pub fn css_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
         self.select_first_or_none(selector)
     }
 
     /// Select elements matching an XPath selector, returning an empty vector on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn xpath_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
         self.xpath(selector).unwrap_or_default()
     }
 
     /// Select the first element matching an XPath selector, returning None on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn xpath_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
         self.xpath_first(selector).ok().flatten()
     }
@@ -410,11 +421,13 @@ impl<S> HtmlResponse<S> {
     }
 
     /// Follow links extracted from a CSS selector and attribute name.
+    #[inline]
     pub fn follow_css(&self, selector: &str, attr_name: &str) -> Vec<Request<S>> {
         self.follow_urls(self.select_attrs(selector, attr_name))
     }
 
     /// Follow links extracted from a CSS selector and attribute name, returning outputs.
+    #[inline]
     pub fn follow_css_outputs(&self, selector: &str, attr_name: &str) -> Vec<SpiderOutput<S>> {
         self.follow_urls_outputs(self.select_attrs(selector, attr_name))
     }
@@ -507,36 +520,43 @@ impl HtmlElement {
         None
     }
 
+    #[inline]
     pub fn select(&self, selector: &str) -> SilkwormResult<Vec<HtmlElement>> {
         Self::select_from_source(&self.html, selector)
     }
 
+    #[inline]
     pub fn select_first(&self, selector: &str) -> SilkwormResult<Option<HtmlElement>> {
         Self::select_first_from_source(&self.html, selector)
     }
 
+    #[inline]
     pub fn select_with(&self, selector: &scraper::Selector) -> Vec<HtmlElement> {
         Self::select_with_from_source(&self.html, selector)
     }
 
+    #[inline]
     pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
         Self::select_first_with_from_source(&self.html, selector)
     }
 
     /// Select elements matching a CSS selector, returning an empty vector on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn select_or_empty(&self, selector: &str) -> Vec<HtmlElement> {
         self.select(selector).unwrap_or_default()
     }
 
     /// Select the first element matching a CSS selector, returning None on error.
     /// This is a convenience method that ignores selector parsing errors.
+    #[inline]
     pub fn select_first_or_none(&self, selector: &str) -> Option<HtmlElement> {
         self.select_first(selector).ok().flatten()
     }
 
     /// Select the first element matching a CSS selector and return its text.
     /// Returns an empty string if the selector doesn't match or fails to parse.
+    #[inline]
     pub fn text_from(&self, selector: &str) -> String {
         self.select_first_or_none(selector)
             .map(|el| el.text())
@@ -545,17 +565,20 @@ impl HtmlElement {
 
     /// Select the first element matching a CSS selector and return an attribute value.
     /// Returns None if the selector doesn't match, fails to parse, or the attribute doesn't exist.
+    #[inline]
     pub fn attr_from(&self, selector: &str, attr_name: &str) -> Option<String> {
         self.select_first_or_none(selector)
             .and_then(|el| el.attr(attr_name))
     }
 
     /// Select elements matching a CSS selector and return their text.
+    #[inline]
     pub fn select_texts(&self, selector: &str) -> Vec<String> {
         Self::select_texts_from_source(&self.html, selector)
     }
 
     /// Select elements matching a CSS selector and return the requested attribute values.
+    #[inline]
     pub fn select_attrs(&self, selector: &str, attr_name: &str) -> Vec<String> {
         Self::select_attrs_from_source(&self.html, selector, attr_name)
     }
@@ -891,11 +914,7 @@ fn encoding_from_bom(body: &[u8]) -> Option<String> {
     None
 }
 
-fn contains_html_marker(snippet: &[u8]) -> bool {
-    contains_ascii_case_insensitive(snippet, b"<html")
-        || contains_ascii_case_insensitive(snippet, b"<!doctype")
-}
-
+#[inline]
 fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || haystack.len() < needle.len() {
         return false;

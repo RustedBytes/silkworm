@@ -11,6 +11,7 @@ pub type Params = HashMap<String, String>;
 pub type Meta = HashMap<String, Value>;
 pub type Item = Value;
 
+#[inline]
 pub fn item_from<T>(value: T) -> SilkwormResult<Item>
 where
     T: Serialize,
@@ -18,6 +19,7 @@ where
     serde_json::to_value(value).map_err(|err| SilkwormError::Pipeline(err.to_string()))
 }
 
+#[inline]
 pub fn item_into<T>(item: Item) -> SilkwormResult<T>
 where
     T: DeserializeOwned,

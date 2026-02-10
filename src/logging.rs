@@ -33,24 +33,29 @@ pub struct Logger {
 }
 
 impl Logger {
+    #[inline]
     pub fn bind(&self, key: &str, value: impl ToString) -> Logger {
         let mut context = self.context.clone();
         context.push((key.to_string(), value.to_string()));
         Logger { context }
     }
 
+    #[inline]
     pub fn debug(&self, message: &str, fields: &[(&str, String)]) {
         self.log(Level::Debug, message, fields);
     }
 
+    #[inline]
     pub fn info(&self, message: &str, fields: &[(&str, String)]) {
         self.log(Level::Info, message, fields);
     }
 
+    #[inline]
     pub fn warn(&self, message: &str, fields: &[(&str, String)]) {
         self.log(Level::Warn, message, fields);
     }
 
+    #[inline]
     pub fn error(&self, message: &str, fields: &[(&str, String)]) {
         self.log(Level::Error, message, fields);
     }

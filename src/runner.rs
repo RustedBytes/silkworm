@@ -36,6 +36,7 @@ impl<S: Spider> Default for RunConfig<S> {
 }
 
 impl<S: Spider> RunConfig<S> {
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
@@ -125,6 +126,7 @@ impl<S: Spider> From<RunConfig<S>> for EngineConfig<S> {
     }
 }
 
+#[inline]
 pub async fn crawl<S: Spider>(spider: S) -> SilkwormResult<()> {
     crawl_with(spider, RunConfig::default()).await
 }
@@ -134,6 +136,7 @@ pub async fn crawl_with<S: Spider>(spider: S, config: RunConfig<S>) -> SilkwormR
     engine.run().await
 }
 
+#[inline]
 pub fn run_spider<S: Spider>(spider: S) -> SilkwormResult<()> {
     run_spider_with(spider, RunConfig::default())
 }

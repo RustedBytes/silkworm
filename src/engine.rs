@@ -11,10 +11,9 @@ use crate::http::HttpClient;
 use crate::logging::{Logger, complete_logs, get_logger};
 use crate::middlewares::{RequestMiddleware, ResponseAction, ResponseMiddleware};
 use crate::pipelines::ItemPipeline;
-use crate::request::{Request, SpiderOutput, SpiderResult};
+use crate::request::{Request, SpiderOutput};
 use crate::response::Response;
 use crate::spider::Spider;
-use crate::types::Item;
 
 struct Stats {
     start_time: Mutex<Option<Instant>>,
@@ -306,7 +305,7 @@ impl<S: Spider> Engine<S> {
 
             let result = self.process_request(req).await;
             if let Err(err) = result {
-                self.state.errors_increment();
+                self.state.stats.errors.fetch_add(1, Ordering::SeqCst);
                 self.state
                     .logger
                     .error("Failed to process request", &[("error", err.to_string())]);
@@ -321,24 +320,34 @@ impl<S: Spider> Engine<S> {
     }
 
     async fn process_request(&self, req: Request<S>) -> SilkwormResult<()> {
-        let req = self.apply_request_middlewares(req).await;
-        self.state.requests_sent_increment();
+        let mut req = req;
+        for mw in &self.state.request_middlewares {
+            req = mw.process_request(req, self.state.spider.clone()).await;
+        }
+        self.state
+            .stats
+            .requests_sent
+            .fetch_add(1, Ordering::SeqCst);
 
         let resp = self.state.http.fetch(req).await?;
-        self.state.responses_received_increment();
+        self.state
+            .stats
+            .responses_received
+            .fetch_add(1, Ordering::SeqCst);
         self.handle_response(resp).await
     }
 
-    async fn apply_request_middlewares(&self, req: Request<S>) -> Request<S> {
-        let mut current = req;
-        for mw in &self.state.request_middlewares {
-            current = mw.process_request(current, self.state.spider.clone()).await;
-        }
-        current
-    }
-
     async fn handle_response(&self, response: Response<S>) -> SilkwormResult<()> {
-        let processed = self.apply_response_middlewares(response).await?;
+        let mut processed = ResponseAction::Response(response);
+        for mw in &self.state.response_middlewares {
+            match processed {
+                ResponseAction::Response(resp) => {
+                    processed = mw.process_response(resp, self.state.spider.clone()).await;
+                }
+                ResponseAction::Request(_) => break,
+            }
+        }
+
         match processed {
             ResponseAction::Request(req) => {
                 self.enqueue(req).await?;
@@ -352,50 +361,28 @@ impl<S: Spider> Engine<S> {
                     let html = resp.into_html(self.state.html_max_size_bytes);
                     self.state.spider.parse(html).await
                 };
-                self.handle_outputs(outputs).await
+                for output in outputs {
+                    match output {
+                        SpiderOutput::Request(req) => {
+                            self.enqueue(*req).await?;
+                        }
+                        SpiderOutput::Item(item) => {
+                            self.state
+                                .stats
+                                .items_scraped
+                                .fetch_add(1, Ordering::SeqCst);
+                            let mut current = item;
+                            for pipe in &self.state.item_pipelines {
+                                current = pipe
+                                    .process_item(current, self.state.spider.clone())
+                                    .await?;
+                            }
+                        }
+                    }
+                }
+                Ok(())
             }
         }
-    }
-
-    async fn apply_response_middlewares(
-        &self,
-        response: Response<S>,
-    ) -> SilkwormResult<ResponseAction<S>> {
-        let mut current = ResponseAction::Response(response);
-        for mw in &self.state.response_middlewares {
-            match current {
-                ResponseAction::Response(resp) => {
-                    current = mw.process_response(resp, self.state.spider.clone()).await;
-                }
-                ResponseAction::Request(_) => break,
-            }
-        }
-        Ok(current)
-    }
-
-    async fn handle_outputs(&self, outputs: SpiderResult<S>) -> SilkwormResult<()> {
-        for output in outputs {
-            match output {
-                SpiderOutput::Request(req) => {
-                    self.enqueue(*req).await?;
-                }
-                SpiderOutput::Item(item) => {
-                    self.process_item(item).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn process_item(&self, item: Item) -> SilkwormResult<()> {
-        self.state.items_scraped_increment();
-        let mut current = item;
-        for pipe in &self.state.item_pipelines {
-            current = pipe
-                .process_item(current, self.state.spider.clone())
-                .await?;
-        }
-        Ok(())
     }
 
     async fn await_idle(&self) {
@@ -475,24 +462,6 @@ impl<S: Spider> Engine<S> {
         }
 
         out
-    }
-}
-
-impl<S: Spider> EngineState<S> {
-    fn requests_sent_increment(&self) {
-        self.stats.requests_sent.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn responses_received_increment(&self) {
-        self.stats.responses_received.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn items_scraped_increment(&self) {
-        self.stats.items_scraped.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn errors_increment(&self) {
-        self.stats.errors.fetch_add(1, Ordering::SeqCst);
     }
 }
 
