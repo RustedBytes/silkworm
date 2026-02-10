@@ -81,6 +81,33 @@ fn parse_kb(line: &str) -> Option<u64> {
     Some(value)
 }
 
+fn format_requests_per_second(requests_sent: usize, elapsed: Duration) -> String {
+    let elapsed_millis = elapsed.as_millis();
+    if elapsed_millis == 0 {
+        return "0.00".to_string();
+    }
+
+    let requests = u64::try_from(requests_sent).unwrap_or(u64::MAX);
+    let centi_per_second = u128::from(requests)
+        .saturating_mul(100_000)
+        .checked_div(elapsed_millis)
+        .unwrap_or(0);
+    let whole = centi_per_second / 100;
+    let frac = centi_per_second % 100;
+    format!("{whole}.{frac:02}")
+}
+
+fn format_mebibytes(bytes: u64) -> String {
+    const MIB: u128 = 1024 * 1024;
+    let centi_mib = u128::from(bytes)
+        .saturating_mul(100)
+        .checked_div(MIB)
+        .unwrap_or(0);
+    let whole = centi_mib / 100;
+    let frac = centi_mib % 100;
+    format!("{whole}.{frac:02}")
+}
+
 #[derive(Clone)]
 pub struct Engine<S: Spider> {
     state: Arc<EngineState<S>>,
@@ -971,7 +998,8 @@ impl<S: Spider> Engine<S> {
     }
 
     fn stats_payload(&self) -> Vec<(&str, String)> {
-        let elapsed = self.state.stats.elapsed().as_secs_f64();
+        let elapsed_duration = self.state.stats.elapsed();
+        let elapsed = elapsed_duration.as_secs_f64();
         let requests_sent = self.state.stats.requests_sent.load(Ordering::SeqCst);
         let responses_received = self.state.stats.responses_received.load(Ordering::SeqCst);
         let items_scraped = self.state.stats.items_scraped.load(Ordering::SeqCst);
@@ -979,11 +1007,7 @@ impl<S: Spider> Engine<S> {
         let pending = self.state.pending.load(Ordering::SeqCst);
         let pending_items = self.state.item_pending.load(Ordering::SeqCst);
         let seen = self.state.seen_count.load(Ordering::SeqCst);
-        let rate = if elapsed > 0.0 {
-            requests_sent as f64 / elapsed
-        } else {
-            0.0
-        };
+        let rate = format_requests_per_second(requests_sent, elapsed_duration);
 
         let mut out = vec![
             ("elapsed_seconds", format!("{elapsed:.1}")),
@@ -993,14 +1017,13 @@ impl<S: Spider> Engine<S> {
             ("errors", errors.to_string()),
             ("pending_requests", pending.to_string()),
             ("pending_items", pending_items.to_string()),
-            ("requests_per_second", format!("{rate:.2}")),
+            ("requests_per_second", rate),
             ("seen_requests", seen.to_string()),
         ];
 
         if let Some((rss_bytes, vms_bytes)) = memory_usage_bytes() {
-            let mb = 1024.0 * 1024.0;
-            out.push(("memory_rss_mb", format!("{:.2}", rss_bytes as f64 / mb)));
-            out.push(("memory_vms_mb", format!("{:.2}", vms_bytes as f64 / mb)));
+            out.push(("memory_rss_mb", format_mebibytes(rss_bytes)));
+            out.push(("memory_vms_mb", format_mebibytes(vms_bytes)));
         }
 
         out

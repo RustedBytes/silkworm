@@ -14,11 +14,11 @@ use crate::spider::Spider;
 pub type MiddlewareFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait RequestMiddleware<S: Spider>: Send + Sync {
-    fn process_request<'a>(
-        &'a self,
+    fn process_request(
+        &self,
         request: Request<S>,
         spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, Request<S>>;
+    ) -> MiddlewareFuture<'_, Request<S>>;
 }
 
 #[derive(Debug)]
@@ -28,11 +28,11 @@ pub enum ResponseAction<S> {
 }
 
 pub trait ResponseMiddleware<S: Spider>: Send + Sync {
-    fn process_response<'a>(
-        &'a self,
+    fn process_response(
+        &self,
         response: Response<S>,
         spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, ResponseAction<S>>;
+    ) -> MiddlewareFuture<'_, ResponseAction<S>>;
 }
 
 pub struct UserAgentMiddleware {
@@ -53,11 +53,11 @@ impl UserAgentMiddleware {
 }
 
 impl<S: Spider> RequestMiddleware<S> for UserAgentMiddleware {
-    fn process_request<'a>(
-        &'a self,
+    fn process_request(
+        &self,
         mut request: Request<S>,
         _spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, Request<S>> {
+    ) -> MiddlewareFuture<'_, Request<S>> {
         Box::pin(async move {
             let has_header = request
                 .headers
@@ -116,11 +116,11 @@ impl ProxyMiddleware {
 }
 
 impl<S: Spider> RequestMiddleware<S> for ProxyMiddleware {
-    fn process_request<'a>(
-        &'a self,
+    fn process_request(
+        &self,
         mut request: Request<S>,
         _spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, Request<S>> {
+    ) -> MiddlewareFuture<'_, Request<S>> {
         Box::pin(async move {
             if self.proxies.is_empty() {
                 return request;
@@ -158,9 +158,7 @@ impl RetryMiddleware {
     ) -> Self {
         let retry_http_codes =
             retry_http_codes.unwrap_or_else(|| vec![500, 502, 503, 504, 522, 524, 408, 429]);
-        let sleep_http_codes = sleep_http_codes
-            .clone()
-            .unwrap_or_else(|| retry_http_codes.clone());
+        let sleep_http_codes = sleep_http_codes.unwrap_or_else(|| retry_http_codes.clone());
         let mut merged = retry_http_codes.clone();
         for code in &sleep_http_codes {
             if !merged.contains(code) {
@@ -178,11 +176,11 @@ impl RetryMiddleware {
 }
 
 impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
-    fn process_response<'a>(
-        &'a self,
+    fn process_response(
+        &self,
         response: Response<S>,
         _spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, ResponseAction<S>> {
+    ) -> MiddlewareFuture<'_, ResponseAction<S>> {
         Box::pin(async move {
             let status = response.status;
             if !self.retry_http_codes.contains(&status) {
@@ -200,7 +198,8 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
             req.set_retry_times(retry_times + 1);
 
             let delay = if self.sleep_http_codes.contains(&status) && self.backoff_base > 0.0 {
-                self.backoff_base * 2f64.powi(retry_times as i32)
+                let exponent = i32::try_from(retry_times).unwrap_or(i32::MAX);
+                self.backoff_base * 2f64.powi(exponent)
             } else {
                 0.0
             };
@@ -266,11 +265,11 @@ impl<S: Spider> DelayMiddleware<S> {
 }
 
 impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
-    fn process_request<'a>(
-        &'a self,
+    fn process_request(
+        &self,
         mut request: Request<S>,
         spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, Request<S>> {
+    ) -> MiddlewareFuture<'_, Request<S>> {
         Box::pin(async move {
             if request.take_request_delay_scheduled() {
                 return request;
@@ -332,11 +331,11 @@ impl SkipNonHtmlMiddleware {
 }
 
 impl<S: Spider> ResponseMiddleware<S> for SkipNonHtmlMiddleware {
-    fn process_response<'a>(
-        &'a self,
+    fn process_response(
+        &self,
         mut response: Response<S>,
         _spider: Arc<S>,
-    ) -> MiddlewareFuture<'a, ResponseAction<S>> {
+    ) -> MiddlewareFuture<'_, ResponseAction<S>> {
         Box::pin(async move {
             if response.request.allow_non_html() {
                 return ResponseAction::Response(response);

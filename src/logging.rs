@@ -34,6 +34,7 @@ pub struct Logger {
 impl Logger {
     #[inline]
     #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn bind(&self, key: &str, value: impl ToString) -> Logger {
         let mut context = self.context.clone();
         context.push((key.to_string(), value.to_string()));

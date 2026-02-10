@@ -132,6 +132,7 @@ impl<S> Response<S> {
         I: IntoIterator<Item = Option<H>>,
         H: AsRef<str>,
     {
+        let callback = callback.or_else(|| self.request.callback.clone());
         hrefs
             .into_iter()
             .flatten()
@@ -148,6 +149,7 @@ impl<S> Response<S> {
         I: IntoIterator<Item = H>,
         H: AsRef<str>,
     {
+        let callback = callback.or_else(|| self.request.callback.clone());
         hrefs
             .into_iter()
             .filter(|href| !href.as_ref().is_empty())

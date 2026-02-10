@@ -5,6 +5,7 @@ use crate::request::{Request, SpiderResult};
 use crate::response::HtmlResponse;
 
 pub trait Spider: Send + Sync + 'static {
+    #[allow(clippy::unnecessary_literal_bound)]
     fn name(&self) -> &str {
         "spider"
     }

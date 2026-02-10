@@ -17,13 +17,9 @@ use crate::types::Item;
 pub type PipelineFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait ItemPipeline<S: Spider>: Send + Sync {
-    fn open<'a>(&'a self, spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>>;
-    fn close<'a>(&'a self, spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>>;
-    fn process_item<'a>(
-        &'a self,
-        item: Item,
-        spider: Arc<S>,
-    ) -> PipelineFuture<'a, SilkwormResult<Item>>;
+    fn open(&self, spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>>;
+    fn close(&self, spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>>;
+    fn process_item(&self, item: Item, spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<Item>>;
 }
 
 type PipelineCallbackFuture = Pin<Box<dyn Future<Output = SilkwormResult<Item>> + Send>>;
@@ -68,25 +64,21 @@ impl<S: Spider> CallbackPipeline<S> {
 }
 
 impl<S: Spider> ItemPipeline<S> for CallbackPipeline<S> {
-    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn open(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             self.logger.info("Opened Callback pipeline", &[]);
             Ok(())
         })
     }
 
-    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn close(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             self.logger.info("Closed Callback pipeline", &[]);
             Ok(())
         })
     }
 
-    fn process_item<'a>(
-        &'a self,
-        item: Item,
-        spider: Arc<S>,
-    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+    fn process_item(&self, item: Item, spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<Item>> {
         Box::pin(async move { (self.callback)(item, spider).await })
     }
 }
@@ -113,7 +105,7 @@ impl JsonLinesPipeline {
 }
 
 impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
-    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn open(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             if let Some(parent) = self.path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -133,7 +125,7 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
         })
     }
 
-    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn close(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             let file = {
                 let mut guard = self.state.lock().await;
@@ -150,11 +142,11 @@ impl<S: Spider> ItemPipeline<S> for JsonLinesPipeline {
         })
     }
 
-    fn process_item<'a>(
-        &'a self,
+    fn process_item(
+        &self,
         item: Item,
         _spider: Arc<S>,
-    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+    ) -> PipelineFuture<'_, SilkwormResult<Item>> {
         Box::pin(async move {
             let line = serde_json::to_string(&item)
                 .map_err(|err| SilkwormError::Pipeline(format!("JSON encode failed: {err}")))?;
@@ -212,7 +204,7 @@ impl CsvPipeline {
 }
 
 impl<S: Spider> ItemPipeline<S> for CsvPipeline {
-    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn open(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             if let Some(parent) = self.path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -235,7 +227,7 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
         })
     }
 
-    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn close(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             let file = {
                 let mut guard = self.state.lock().await;
@@ -252,11 +244,11 @@ impl<S: Spider> ItemPipeline<S> for CsvPipeline {
         })
     }
 
-    fn process_item<'a>(
-        &'a self,
+    fn process_item(
+        &self,
         item: Item,
         _spider: Arc<S>,
-    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+    ) -> PipelineFuture<'_, SilkwormResult<Item>> {
         Box::pin(async move {
             let flattened = flatten_item(&item);
             let (mut file, fieldnames, header_written) = {
@@ -339,7 +331,7 @@ impl XmlPipeline {
 }
 
 impl<S: Spider> ItemPipeline<S> for XmlPipeline {
-    fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn open(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             if let Some(parent) = self.path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -366,7 +358,7 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
         })
     }
 
-    fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
+    fn close(&self, _spider: Arc<S>) -> PipelineFuture<'_, SilkwormResult<()>> {
         Box::pin(async move {
             let file = {
                 let mut guard = self.file.lock().await;
@@ -385,11 +377,11 @@ impl<S: Spider> ItemPipeline<S> for XmlPipeline {
         })
     }
 
-    fn process_item<'a>(
-        &'a self,
+    fn process_item(
+        &self,
         item: Item,
         _spider: Arc<S>,
-    ) -> PipelineFuture<'a, SilkwormResult<Item>> {
+    ) -> PipelineFuture<'_, SilkwormResult<Item>> {
         Box::pin(async move {
             let mut file = {
                 let mut guard = self.file.lock().await;

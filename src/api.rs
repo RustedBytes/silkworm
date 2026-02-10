@@ -120,7 +120,7 @@ impl UtilityFetcher {
         let client = if is_default_utility_options(&options) {
             shared_default_client()?
         } else {
-            build_client(&options)?
+            build_client(options)?
         };
         Ok(UtilityFetcher { client })
     }
@@ -160,15 +160,24 @@ fn is_default_utility_options(options: &UtilityFetchOptions) -> bool {
     options == &UtilityFetchOptions::default()
 }
 
-fn build_client(options: &UtilityFetchOptions) -> SilkwormResult<HttpClient> {
+fn build_client(options: UtilityFetchOptions) -> SilkwormResult<HttpClient> {
+    let UtilityFetchOptions {
+        concurrency,
+        default_headers,
+        timeout,
+        html_max_size_bytes,
+        follow_redirects,
+        max_redirects,
+        keep_alive,
+    } = options;
     HttpClient::new(
-        options.concurrency,
-        options.default_headers.clone(),
-        options.timeout,
-        options.html_max_size_bytes,
-        options.follow_redirects,
-        options.max_redirects,
-        options.keep_alive,
+        concurrency,
+        default_headers,
+        timeout,
+        html_max_size_bytes,
+        follow_redirects,
+        max_redirects,
+        keep_alive,
     )
 }
 
@@ -177,7 +186,7 @@ fn shared_default_client() -> SilkwormResult<HttpClient> {
     let client = if let Some(existing) = CLIENT.get() {
         existing.clone()
     } else {
-        let built = build_client(&UtilityFetchOptions::default())?;
+        let built = build_client(UtilityFetchOptions::default())?;
         let _ = CLIENT.set(built.clone());
         built
     };
@@ -191,7 +200,7 @@ async fn fetch_text_with_options(
     let client = if is_default_utility_options(options) {
         shared_default_client()?
     } else {
-        build_client(options)?
+        build_client(options.clone())?
     };
     fetch_text_with_client(&client, url).await
 }
