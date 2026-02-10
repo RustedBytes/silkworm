@@ -152,7 +152,8 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_middlewares(request_middlewares, response_middlewares)
         .with_item_pipeline(JsonLinesPipeline::new("data/lobsters.jl"))
         .with_request_timeout(Duration::from_secs(10))
-        .with_log_stats_interval(Duration::from_secs(10));
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_fail_fast(true);
 
     crawl_with(LobstersSpider::new(pages), config).await
 }

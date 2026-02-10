@@ -69,6 +69,7 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
         .with_item_pipeline(JsonLinesPipeline::new("data/quotes_ergonomic.jl"))
         .with_request_timeout(Duration::from_secs(10))
-        .with_log_stats_interval(Duration::from_secs(10));
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_fail_fast(true);
     crawl_with(QuotesSpider, config).await
 }

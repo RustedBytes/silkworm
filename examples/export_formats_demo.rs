@@ -102,7 +102,8 @@ async fn main() -> silkworm::SilkwormResult<()> {
             ]),
         ))
         .with_request_timeout(Duration::from_secs(10))
-        .with_log_stats_interval(Duration::from_secs(10));
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_fail_fast(true);
 
     crawl_with(ExportFormatsSpider::new(max_pages), config).await
 }

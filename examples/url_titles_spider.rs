@@ -191,7 +191,8 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_request_timeout(Duration::from_secs(5))
         .with_log_stats_interval(Duration::from_secs(10))
         .with_html_max_size_bytes(1_000_000)
-        .with_keep_alive(true);
+        .with_keep_alive(true)
+        .with_fail_fast(true);
 
     crawl_with(UrlTitlesSpider::new(urls_file), config).await
 }

@@ -253,7 +253,8 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_item_pipeline(JsonLinesPipeline::new(output))
         .with_request_timeout(Duration::from_secs(30))
         .with_log_stats_interval(Duration::from_secs(10))
-        .with_html_max_size_bytes(2_000_000);
+        .with_html_max_size_bytes(2_000_000)
+        .with_fail_fast(true);
 
     crawl_with(SitemapSpider::new(sitemap_url, pages), config).await
 }

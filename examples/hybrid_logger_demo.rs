@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use silkworm::{Logger, crawl, get_logger, prelude::*};
+use silkworm::{Logger, crawl_with, get_logger, prelude::*};
 
 struct HybridLoggerSpider {
     logger: Logger,
@@ -74,5 +74,6 @@ async fn main() -> silkworm::SilkwormResult<()> {
     println!(
         "Redirect stdout to capture logs: cargo run --example hybrid_logger_demo > data/logs.txt"
     );
-    crawl(HybridLoggerSpider::new()).await
+    let config = RunConfig::new().with_fail_fast(true);
+    crawl_with(HybridLoggerSpider::new(), config).await
 }

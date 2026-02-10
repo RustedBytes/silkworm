@@ -126,6 +126,7 @@ async fn main() -> silkworm::SilkwormResult<()> {
         .with_item_pipeline(CallbackPipeline::from_sync(enrich_item))
         .with_item_pipeline(CallbackPipeline::from_sync(print_item))
         .with_request_timeout(Duration::from_secs(10))
-        .with_log_stats_interval(Duration::from_secs(10));
+        .with_log_stats_interval(Duration::from_secs(10))
+        .with_fail_fast(true);
     crawl_with(QuotesSpider, config).await
 }
