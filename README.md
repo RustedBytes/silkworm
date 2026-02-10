@@ -131,7 +131,7 @@ use silkworm::{
 let config = RunConfig::new()
     .with_request_middleware(UserAgentMiddleware::new(
         vec![],
-        Some("silkworm-rs/0.1".to_string()),
+        Some("silkworm-rs/example-spider".to_string()),
     ))
     .with_request_middleware(DelayMiddleware::fixed(0.25))
     .with_request_middleware(ProxyMiddleware::new(
@@ -158,7 +158,10 @@ use silkworm::Request;
 
 let request = Request::get("https://example.com/search")
     .with_params([("q", "rust"), ("page", "1")])
-    .with_headers([("Accept", "text/html"), ("User-Agent", "silkworm-rs/0.1")]);
+    .with_headers([
+        ("Accept", "text/html"),
+        ("User-Agent", "silkworm-rs/example-spider"),
+    ]);
 ```
 
 If `SkipNonHtmlMiddleware` is enabled, mark requests you want to handle as JSON/XML:

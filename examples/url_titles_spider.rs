@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/url-titles-spider";
+
 struct UrlTitlesSpider {
     urls_path: PathBuf,
 }
@@ -174,8 +176,9 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let urls_file = args.urls_file;
     let output = args.output;
 
-    let request_middlewares: Vec<Arc<dyn RequestMiddleware<UrlTitlesSpider>>> =
-        vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
+    let request_middlewares: Vec<Arc<dyn RequestMiddleware<UrlTitlesSpider>>> = vec![Arc::new(
+        UserAgentMiddleware::new(vec![], Some(USER_AGENT.to_string())),
+    )];
     let response_middlewares: Vec<Arc<dyn ResponseMiddleware<UrlTitlesSpider>>> = vec![
         Arc::new(RetryMiddleware::new(3, None, Some(vec![403, 429]), 0.5)),
         Arc::new(SkipNonHtmlMiddleware::new(None, 1024)),

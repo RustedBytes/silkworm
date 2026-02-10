@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/export-formats-demo";
+
 struct ExportFormatsSpider {
     max_pages: usize,
     pages_scraped: AtomicUsize,
@@ -55,16 +57,11 @@ impl Spider for ExportFormatsSpider {
             if text.is_empty() || author.is_empty() {
                 continue;
             }
-            let tag_values = quote
-                .select_or_empty(".tag")
-                .into_iter()
-                .map(|tag| tag.text())
-                .collect::<Vec<_>>();
 
             let quote = QuoteItem {
                 text,
                 author,
-                tags: tag_values,
+                tags: quote.select_texts(".tag"),
             };
             if let Ok(item) = item_from(quote) {
                 out.push(item.into());
@@ -89,7 +86,10 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let max_pages = Args::parse().pages.max(1);
 
     let config = RunConfig::new()
-        .with_request_middleware(UserAgentMiddleware::new(vec![], None))
+        .with_request_middleware(UserAgentMiddleware::new(
+            vec![],
+            Some(USER_AGENT.to_string()),
+        ))
         .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
         .with_item_pipeline(JsonLinesPipeline::new("data/quotes_demo.jl"))
         .with_item_pipeline(XmlPipeline::new("data/quotes_demo.xml", "quotes", "quote"))
@@ -101,7 +101,8 @@ async fn main() -> silkworm::SilkwormResult<()> {
                 "tags".to_string(),
             ]),
         ))
-        .with_request_timeout(Duration::from_secs(10));
+        .with_request_timeout(Duration::from_secs(10))
+        .with_log_stats_interval(Duration::from_secs(10));
 
     crawl_with(ExportFormatsSpider::new(max_pages), config).await
 }

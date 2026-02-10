@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use silkworm::{Response, crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/sitemap-spider";
+
 struct SitemapSpider {
     sitemap_url: String,
     max_pages: Option<usize>,
@@ -229,8 +231,9 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let concurrency = args.concurrency;
     let delay = args.delay;
 
-    let mut request_middlewares: Vec<Arc<dyn RequestMiddleware<SitemapSpider>>> =
-        vec![Arc::new(UserAgentMiddleware::new(vec![], None))];
+    let mut request_middlewares: Vec<Arc<dyn RequestMiddleware<SitemapSpider>>> = vec![Arc::new(
+        UserAgentMiddleware::new(vec![], Some(USER_AGENT.to_string())),
+    )];
     if delay > 0.0 {
         request_middlewares.push(Arc::new(DelayMiddleware::fixed(delay)));
     }

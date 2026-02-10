@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/lobsters-spider";
+
 struct LobstersSpider {
     max_pages: usize,
     pages_seen: AtomicUsize,
@@ -135,7 +137,10 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let pages = Args::parse().pages.max(1);
 
     let request_middlewares: Vec<Arc<dyn RequestMiddleware<LobstersSpider>>> = vec![
-        Arc::new(UserAgentMiddleware::new(vec![], None)),
+        Arc::new(UserAgentMiddleware::new(
+            vec![],
+            Some(USER_AGENT.to_string()),
+        )),
         Arc::new(DelayMiddleware::random(0.3, 1.0)),
     ];
     let response_middlewares: Vec<Arc<dyn ResponseMiddleware<LobstersSpider>>> = vec![Arc::new(

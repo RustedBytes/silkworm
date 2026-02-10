@@ -91,7 +91,10 @@ use silkworm::{
 };
 
 let config = RunConfig::new()
-    .with_request_middleware(UserAgentMiddleware::new(vec![], None))
+    .with_request_middleware(UserAgentMiddleware::new(
+        vec![],
+        Some("silkworm-rs/docs-example".to_string()),
+    ))
     .with_request_middleware(DelayMiddleware::fixed(0.25))
     .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
     .with_response_middleware(SkipNonHtmlMiddleware::new(None, 1024));

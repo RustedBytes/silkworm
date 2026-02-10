@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/quotes-spider";
+
 struct QuotesSpider;
 
 #[derive(Debug, Serialize)]
@@ -30,16 +32,11 @@ impl Spider for QuotesSpider {
             if text.is_empty() || author.is_empty() {
                 continue;
             }
-            let tag_values = quote
-                .select_or_empty(".tag")
-                .into_iter()
-                .map(|tag| tag.text())
-                .collect::<Vec<_>>();
 
             let quote = QuoteItem {
                 text,
                 author,
-                tags: tag_values,
+                tags: quote.select_texts(".tag"),
             };
             if let Ok(item) = item_from(quote) {
                 out.push(item.into());
@@ -62,7 +59,7 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let config = RunConfig::new()
         .with_request_middleware(UserAgentMiddleware::new(
             vec![],
-            Some("silkworm-rs/0.1".to_string()),
+            Some(USER_AGENT.to_string()),
         ))
         .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
         .with_item_pipeline(JsonLinesPipeline::new("data/quotes.jl"))

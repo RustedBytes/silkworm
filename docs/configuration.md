@@ -28,7 +28,10 @@ let config = RunConfig::new()
     .with_concurrency(32)
     .with_max_seen_requests(50_000)
     .with_request_timeout(Duration::from_secs(10))
-    .with_request_middleware(UserAgentMiddleware::new(vec![], None))
+    .with_request_middleware(UserAgentMiddleware::new(
+        vec![],
+        Some("silkworm-rs/docs-example".to_string()),
+    ))
     .with_request_middleware(DelayMiddleware::fixed(0.2))
     .with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
 ```

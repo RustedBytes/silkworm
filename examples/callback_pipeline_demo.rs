@@ -1,13 +1,17 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Number, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
-use silkworm::{Item, SilkwormResult, crawl_with, prelude::*};
+use silkworm::{Item, SilkwormResult, crawl_with, item_from, prelude::*};
+
+const SHORT_QUOTE_MIN_LEN: usize = 10;
+const PREVIEW_CHAR_LIMIT: usize = 50;
+const USER_AGENT: &str = "silkworm-rs/callback-pipeline-demo";
 
 struct QuotesSpider;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct QuoteItem {
     text: String,
     author: String,
@@ -29,16 +33,14 @@ impl Spider for QuotesSpider {
         for quote in response.select_or_empty(".quote") {
             let text = quote.text_from(".text");
             let author = quote.text_from(".author");
-            let tag_values = quote
-                .select_or_empty(".tag")
-                .into_iter()
-                .map(|tag| tag.text())
-                .collect::<Vec<_>>();
+            if text.is_empty() || author.is_empty() {
+                continue;
+            }
 
             let quote = QuoteItem {
                 text,
                 author,
-                tags: tag_values,
+                tags: quote.select_texts(".tag"),
             };
             if let Ok(item) = item_from(quote) {
                 out.push(item.into());
@@ -50,42 +52,44 @@ impl Spider for QuotesSpider {
 }
 
 fn snippet(text: &str, max: usize) -> String {
-    text.chars().take(max).collect::<String>()
+    let truncated = text.chars().take(max).collect::<String>();
+    if text.chars().count() > max {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+fn item_author(item: &Item) -> Option<&str> {
+    item.get("author").and_then(|value| value.as_str())
+}
+
+fn item_text(item: &Item) -> Option<&str> {
+    item.get("text").and_then(|value| value.as_str())
+}
+
+fn item_tag_count(item: &Item) -> usize {
+    item.get("tags")
+        .and_then(|value| value.as_array())
+        .map(std::vec::Vec::len)
+        .unwrap_or(0)
 }
 
 fn print_item(item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item> {
-    let parsed = item_into::<QuoteItem>(item.clone()).ok();
-    let (author, text) = parsed
-        .map(|quote| (quote.author, quote.text))
-        .unwrap_or_else(|| {
-            let author = item
-                .get("author")
-                .and_then(|value| value.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let text = item
-                .get("text")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string();
-            (author, text)
-        });
-    println!("[{}] {}: {}", spider.name(), author, snippet(&text, 50));
+    let author = item_author(&item).unwrap_or("unknown");
+    let text = item_text(&item).unwrap_or("");
+    println!(
+        "[{}] {}: {}",
+        spider.name(),
+        author,
+        snippet(text, PREVIEW_CHAR_LIMIT)
+    );
     Ok(item)
 }
 
 async fn validate_item(item: Item, _spider: Arc<QuotesSpider>) -> SilkwormResult<Item> {
-    let text = item_into::<QuoteItem>(item.clone())
-        .ok()
-        .map(|quote| quote.text)
-        .or_else(|| {
-            item.get("text")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-        });
-
-    if let Some(text) = text
-        && text.trim().len() < 10
+    if let Some(text) = item_text(&item)
+        && text.trim().chars().count() < SHORT_QUOTE_MIN_LEN
     {
         println!("Warning: short quote found");
     }
@@ -93,11 +97,7 @@ async fn validate_item(item: Item, _spider: Arc<QuotesSpider>) -> SilkwormResult
 }
 
 fn enrich_item(mut item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item> {
-    let tag_count = item
-        .get("tags")
-        .and_then(|value| value.as_array())
-        .map(|values| values.len())
-        .unwrap_or(0);
+    let tag_count = item_tag_count(&item);
 
     if let Some(map) = item.as_object_mut() {
         map.insert(
@@ -117,10 +117,15 @@ fn enrich_item(mut item: Item, spider: Arc<QuotesSpider>) -> SilkwormResult<Item
 async fn main() -> silkworm::SilkwormResult<()> {
     let config = RunConfig::new()
         .with_concurrency(4)
-        .with_request_middleware(UserAgentMiddleware::new(vec![], None))
-        .with_item_pipeline(CallbackPipeline::from_sync(print_item))
+        .with_request_middleware(UserAgentMiddleware::new(
+            vec![],
+            Some(USER_AGENT.to_string()),
+        ))
+        .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
         .with_item_pipeline(CallbackPipeline::new(validate_item))
         .with_item_pipeline(CallbackPipeline::from_sync(enrich_item))
-        .with_request_timeout(Duration::from_secs(10));
+        .with_item_pipeline(CallbackPipeline::from_sync(print_item))
+        .with_request_timeout(Duration::from_secs(10))
+        .with_log_stats_interval(Duration::from_secs(10));
     crawl_with(QuotesSpider, config).await
 }

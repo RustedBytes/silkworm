@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use silkworm::{crawl_with, prelude::*};
 
+const USER_AGENT: &str = "silkworm-rs/quotes-ergonomic";
+
 /// Demonstrates the new ergonomic API for selecting elements.
 /// Compare this with the original quotes_spider.rs to see the improvements.
 struct QuotesSpider;
@@ -62,7 +64,7 @@ async fn main() -> silkworm::SilkwormResult<()> {
     let config = RunConfig::new()
         .with_request_middleware(UserAgentMiddleware::new(
             vec![],
-            Some("silkworm-rs/0.1".to_string()),
+            Some(USER_AGENT.to_string()),
         ))
         .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
         .with_item_pipeline(JsonLinesPipeline::new("data/quotes_ergonomic.jl"))
