@@ -3,8 +3,8 @@
 [![Crates.io Version](https://img.shields.io/crates/v/silkworm-rs)](https://crates.io/crates/silkworm-rs)
 [![Tests](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml/badge.svg)](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml)
 
-Async-first web scraping framework for Rust. Built on `wreq` + `scraper` with
-XPath support via `sxd-xpath`. It keeps the API small
+Async-first web scraping framework for Rust. Built on [`wreq`](https://crates.io/crates/wreq) + [`scraper`](https://crates.io/crates/scraper) with
+XPath support via [`sxd-xpath`](https://crates.io/crates/sxd-xpath). It keeps the API small
 (Spider/Request/Response), adds middlewares and pipelines, and ships with
 structured logging so you can focus on crawling.
 
@@ -26,13 +26,13 @@ structured logging so you can focus on crawling.
 cargo add silkworm-rs
 ```
 
-If you want to use the async API directly (instead of `run_spider`), add Tokio:
+If you want to use the async API directly (instead of `run_spider`), add [Tokio](https://crates.io/crates/tokio):
 
 ```bash
 cargo add tokio --features rt-multi-thread,macros
 ```
 
-The examples below also use `serde_json` for convenience:
+The examples below also use [`serde_json`](https://crates.io/crates/serde_json) for convenience:
 
 ```bash
 cargo add serde_json
@@ -230,7 +230,7 @@ SILKWORM_LOG_LEVEL=DEBUG cargo run
 
 ## Utility API
 
-Fetch HTML directly and parse with `scraper`:
+Fetch HTML directly and parse with [`scraper`](https://crates.io/crates/scraper):
 
 ```rust
 #[tokio::main]
