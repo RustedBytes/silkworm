@@ -68,15 +68,16 @@ Relevant code:
 
 ## Request De-Duplication
 
-Silkworm maintains a `seen` set of URLs. If a request is not marked as
-`dont_filter`, the engine skips duplicates. You can optionally cap the set
-with `max_seen_requests` to bound memory.
+Silkworm maintains a `seen` set of request fingerprints. The fingerprint uses
+HTTP method + canonical URL (including merged query params). If a request is
+not marked as `dont_filter`, the engine skips duplicates. You can optionally
+cap the set with `max_seen_requests` to bound memory.
 
 ```rust
 // enqueue (excerpt)
 if !req.dont_filter {
     let mut seen = self.state.seen.lock().await;
-    if !seen.insert_if_new(req.url.as_str()) {
+    if !seen.insert_if_new(&request_fingerprint(&req)) {
         return Ok(());
     }
 }
@@ -114,6 +115,7 @@ Responses pass through response middlewares. A middleware can:
 
 - Return `ResponseAction::Response` to continue processing a response.
 - Return `ResponseAction::Request` to re-queue a request (e.g., retries).
+  Retries can carry delay metadata and be scheduled without blocking workers.
 
 If no callback is defined, the engine wraps the response in `HtmlResponse` and
 calls `Spider::parse`.

@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
+use bytes::{Bytes, BytesMut};
 use tokio::sync::Semaphore;
 use url::Url;
 use wreq::redirect::Policy;
@@ -9,7 +10,7 @@ use crate::errors::{SilkwormError, SilkwormResult};
 use crate::logging::get_logger;
 use crate::request::Request;
 use crate::response::Response;
-use crate::types::Headers;
+use crate::types::{Headers, Params};
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -108,7 +109,7 @@ impl HttpClient {
                 builder = builder.body(data.clone());
             }
 
-            let response = match builder.send().await {
+            let mut response = match builder.send().await {
                 Ok(resp) => resp,
                 Err(err) => {
                     let msg = format!("Request to {} failed: {}", current_req.url, err);
@@ -148,13 +149,18 @@ impl HttpClient {
                 continue;
             }
 
-            let body = match response.bytes().await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    let msg = format!("Failed to read response body from {}: {}", url, err);
-                    return Err(SilkwormError::Http(msg));
-                }
-            };
+            let (body, truncated) =
+                read_response_body_limited(&mut response, self.html_max_size_bytes, url.as_str())
+                    .await?;
+            if truncated {
+                self.logger.warn(
+                    "Response body truncated",
+                    &[
+                        ("url", url.clone()),
+                        ("max_bytes", self.html_max_size_bytes.to_string()),
+                    ],
+                );
+            }
 
             self.logger.debug(
                 "HTTP response",
@@ -195,29 +201,7 @@ impl HttpClient {
     }
 
     fn build_url<S>(&self, req: &Request<S>) -> SilkwormResult<String> {
-        if req.params.is_empty() {
-            return Ok(req.url.clone());
-        }
-        let mut parsed = Url::parse(&req.url)
-            .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", req.url, err)))?;
-
-        let mut merged: HashMap<String, String> = parsed
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
-        for (key, value) in &req.params {
-            merged.insert(key.clone(), value.clone());
-        }
-
-        parsed.query_pairs_mut().clear();
-        {
-            let mut pairs = parsed.query_pairs_mut();
-            for (key, value) in merged {
-                pairs.append_pair(&key, &value);
-            }
-        }
-
-        Ok(parsed.to_string())
+        build_url_with_params(&req.url, &req.params)
     }
 
     fn build_client_with_proxy(&self, proxy_url: &str) -> SilkwormResult<wreq::Client> {
@@ -247,6 +231,74 @@ impl HttpClient {
         matches!(status, 301 | 302 | 303 | 307 | 308)
             && header_value_case_insensitive(headers, "location").is_some()
     }
+}
+
+pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
+    if params.is_empty() {
+        return Ok(url.to_string());
+    }
+    let mut parsed = Url::parse(url)
+        .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+
+    let mut merged: BTreeMap<String, String> = parsed
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    for (key, value) in params {
+        merged.insert(key.clone(), value.clone());
+    }
+
+    parsed.query_pairs_mut().clear();
+    {
+        let mut pairs = parsed.query_pairs_mut();
+        for (key, value) in merged {
+            pairs.append_pair(&key, &value);
+        }
+    }
+
+    Ok(parsed.to_string())
+}
+
+async fn read_response_body_limited(
+    response: &mut wreq::Response,
+    max_bytes: usize,
+    url: &str,
+) -> SilkwormResult<(Bytes, bool)> {
+    if max_bytes == 0 {
+        while response
+            .chunk()
+            .await
+            .map_err(|err| {
+                SilkwormError::Http(format!("Failed to read response body from {url}: {err}"))
+            })?
+            .is_some()
+        {}
+        return Ok((Bytes::new(), true));
+    }
+
+    let mut body = BytesMut::with_capacity(max_bytes.min(8192));
+    let mut truncated = false;
+    loop {
+        let chunk = response.chunk().await.map_err(|err| {
+            SilkwormError::Http(format!("Failed to read response body from {url}: {err}"))
+        })?;
+        let Some(chunk) = chunk else { break };
+
+        if body.len() >= max_bytes {
+            truncated = true;
+            continue;
+        }
+
+        let remaining = max_bytes - body.len();
+        if chunk.len() <= remaining {
+            body.extend_from_slice(&chunk);
+        } else {
+            body.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+        }
+    }
+
+    Ok((body.freeze(), truncated))
 }
 
 fn resolve_redirect_url(current_url: &str, location: &str) -> String {
@@ -307,6 +359,40 @@ mod tests {
     use crate::request::Request;
     use crate::types::{Headers, Item};
     use std::collections::HashMap;
+    use std::io::ErrorKind;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn start_test_server(
+        body: &str,
+    ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let body = body.to_string();
+        let handle = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let mut request = Vec::new();
+                loop {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => read,
+                    };
+                    request.extend_from_slice(&buf[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        Ok((format!("http://{}", addr), handle))
+    }
 
     #[test]
     fn build_url_merges_params() {
@@ -386,5 +472,24 @@ mod tests {
             "https://example.com/next".to_string(),
         );
         assert!(client.should_follow_redirect(302, &headers));
+    }
+
+    #[tokio::test]
+    async fn fetch_truncates_body_to_html_max_size_bytes() {
+        let (url, handle) = match start_test_server("0123456789").await {
+            Ok(value) => value,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to start local test server: {err}"),
+        };
+
+        let client = HttpClient::new(1, Headers::new(), None, 4, false, 3, false).expect("client");
+        let response = client
+            .fetch(Request::<()>::new(url.clone()))
+            .await
+            .expect("response");
+
+        assert_eq!(response.url, url);
+        assert_eq!(response.body.as_ref(), b"0123");
+        handle.await.expect("server task");
     }
 }

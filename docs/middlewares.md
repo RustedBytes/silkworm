@@ -69,7 +69,8 @@ Retries responses based on status codes and exponential backoff.
 Behavior details:
 - Uses `request.meta["retry_times"]` to track attempts.
 - Marks retry requests as `dont_filter` to bypass de-duplication.
-- Optionally sleeps before retry for throttling.
+- Stores backoff delay metadata so the engine can schedule delayed retries
+  without blocking worker execution.
 
 Code:
 - `RetryMiddleware`: `../src/middlewares.rs`

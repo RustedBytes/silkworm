@@ -9,7 +9,9 @@ use tokio::task::JoinSet;
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::http::HttpClient;
 use crate::logging::{Logger, complete_logs, get_logger};
-use crate::middlewares::{RequestMiddleware, ResponseAction, ResponseMiddleware};
+use crate::middlewares::{
+    RETRY_DELAY_SECS_META_KEY, RequestMiddleware, ResponseAction, ResponseMiddleware,
+};
 use crate::pipelines::ItemPipeline;
 use crate::request::{Request, SpiderOutput};
 use crate::response::Response;
@@ -149,6 +151,7 @@ struct EngineState<S: Spider> {
     stats: Stats,
     logger: Logger,
     html_max_size_bytes: usize,
+    scheduled_requests: AsyncMutex<JoinSet<()>>,
 }
 
 struct PendingRequestGuard<S: Spider> {
@@ -192,6 +195,22 @@ fn finish_request_state<S: Spider>(state: &EngineState<S>) {
     state.pending_notify.notify_waiters();
 }
 
+fn request_fingerprint<S>(req: &Request<S>) -> String {
+    let method = req.method.trim().to_ascii_uppercase();
+    let merged_url = crate::http::build_url_with_params(req.url.as_str(), &req.params)
+        .unwrap_or_else(|_| req.url.clone());
+    format!("{method} {merged_url}")
+}
+
+fn take_retry_delay<S>(req: &mut Request<S>) -> Option<Duration> {
+    let value = req.meta.remove(RETRY_DELAY_SECS_META_KEY)?;
+    let seconds = value.as_f64().unwrap_or(0.0);
+    if seconds <= 0.0 {
+        return None;
+    }
+    Some(Duration::from_secs_f64(seconds))
+}
+
 impl<S: Spider> Engine<S> {
     pub fn new(spider: S, config: EngineConfig<S>) -> SilkwormResult<Self> {
         let EngineConfig {
@@ -209,6 +228,11 @@ impl<S: Spider> Engine<S> {
         if max_seen_requests == Some(0) {
             return Err(SilkwormError::Config(
                 "max_seen_requests must be greater than zero when set".to_string(),
+            ));
+        }
+        if max_pending_requests == Some(0) {
+            return Err(SilkwormError::Config(
+                "max_pending_requests must be greater than zero when set".to_string(),
             ));
         }
         let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
@@ -242,6 +266,7 @@ impl<S: Spider> Engine<S> {
             stats: Stats::new(),
             logger,
             html_max_size_bytes,
+            scheduled_requests: AsyncMutex::new(JoinSet::new()),
         };
         Ok(Engine {
             state: Arc::new(state),
@@ -265,60 +290,75 @@ impl<S: Spider> Engine<S> {
             });
         }
 
-        if let Some(interval) = self.state.log_stats_interval
+        let stats_task = if let Some(interval) = self.state.log_stats_interval
             && interval > Duration::ZERO
         {
             let engine = Self {
                 state: self.state.clone(),
             };
-            join_set.spawn(async move {
+            Some(tokio::spawn(async move {
                 engine.log_statistics(interval).await;
-            });
-        }
+            }))
+        } else {
+            None
+        };
+
+        let mut run_error: Option<SilkwormError> = None;
 
         if let Err(err) = self.open_spider().await {
             self.state
                 .logger
                 .error("Failed to open spider", &[("error", err.to_string())]);
-            self.shutdown().await;
-
-            while let Some(res) = join_set.join_next().await {
-                if let Err(err) = res {
-                    self.state
-                        .logger
-                        .error("Worker task failed", &[("error", format!("{err}"))]);
-                }
-            }
-
-            self.state.http.close().await;
-            if let Err(close_err) = self.close_spider().await {
-                self.state.logger.error(
-                    "Failed to close spider",
-                    &[("error", close_err.to_string())],
-                );
-            }
-            complete_logs();
-            return Err(err);
+            run_error = Some(err);
+        } else if let Err(err) = self.await_idle_or_worker_health(&mut join_set).await {
+            self.state
+                .logger
+                .error("Engine stopped unexpectedly", &[("error", err.to_string())]);
+            run_error = Some(err);
         }
 
-        self.await_idle().await;
         self.shutdown().await;
+        self.shutdown_scheduled_requests().await;
 
-        while let Some(res) = join_set.join_next().await {
-            if let Err(err) = res {
-                self.state
-                    .logger
-                    .error("Worker task failed", &[("error", format!("{err}"))]);
+        if run_error.is_none() {
+            if let Some(err) = self.join_workers(&mut join_set).await {
+                run_error = Some(err);
+            }
+        } else {
+            let _ = self.join_workers(&mut join_set).await;
+        }
+
+        if let Some(handle) = stats_task
+            && let Err(err) = handle.await
+        {
+            self.state
+                .logger
+                .error("Statistics task failed", &[("error", format!("{err}"))]);
+            if run_error.is_none() {
+                run_error = Some(SilkwormError::Spider(format!(
+                    "statistics task failed: {err}"
+                )));
             }
         }
 
-        self.state
-            .logger
-            .info("Final crawl statistics", &self.stats_payload());
+        if run_error.is_none() {
+            self.state
+                .logger
+                .info("Final crawl statistics", &self.stats_payload());
+        }
 
         self.state.http.close().await;
-        self.close_spider().await?;
+
+        if let Err(err) = self.close_spider().await
+            && run_error.is_none()
+        {
+            run_error = Some(err);
+        }
+
         complete_logs();
+        if let Some(err) = run_error {
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -337,17 +377,32 @@ impl<S: Spider> Engine<S> {
 
     async fn close_spider(&self) -> SilkwormResult<()> {
         self.state.logger.info("Closing spider", &[]);
-        for pipe in &self.state.item_pipelines {
-            pipe.close(self.state.spider.clone()).await?;
+        let mut first_error = None;
+        for (idx, pipe) in self.state.item_pipelines.iter().enumerate() {
+            if let Err(err) = pipe.close(self.state.spider.clone()).await {
+                self.state.logger.error(
+                    "Failed to close pipeline",
+                    &[("index", idx.to_string()), ("error", err.to_string())],
+                );
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
         }
         self.state.spider.close().await;
+        if let Some(err) = first_error {
+            return Err(err);
+        }
         Ok(())
     }
 
-    async fn enqueue(&self, req: Request<S>) -> SilkwormResult<()> {
+    async fn enqueue(&self, mut req: Request<S>) -> SilkwormResult<()> {
+        let retry_delay = take_retry_delay(&mut req);
+
         if !req.dont_filter {
+            let fingerprint = request_fingerprint(&req);
             let mut seen = self.state.seen.lock().await;
-            if !seen.insert_if_new(req.url.as_str()) {
+            if !seen.insert_if_new(&fingerprint) {
                 self.state
                     .logger
                     .debug("Skipping already seen request", &[("url", req.url.clone())]);
@@ -356,17 +411,59 @@ impl<S: Spider> Engine<S> {
             self.state.seen_count.fetch_add(1, Ordering::SeqCst);
         }
 
+        if let Some(delay) = retry_delay {
+            return self.enqueue_delayed(req, delay).await;
+        }
+
+        self.enqueue_immediate(req).await
+    }
+
+    async fn enqueue_immediate(&self, req: Request<S>) -> SilkwormResult<()> {
         self.state
             .logger
             .debug("Enqueued request", &[("url", req.url.clone())]);
 
         self.state.pending.fetch_add(1, Ordering::SeqCst);
         if let Err(err) = self.state.queue_tx.send(req).await {
-            self.state.pending.fetch_sub(1, Ordering::SeqCst);
+            finish_request_state(self.state.as_ref());
             return Err(SilkwormError::Http(format!(
                 "Failed to enqueue request: {err}"
             )));
         }
+        Ok(())
+    }
+
+    async fn enqueue_delayed(&self, req: Request<S>, delay: Duration) -> SilkwormResult<()> {
+        let delay_seconds = format!("{:.3}", delay.as_secs_f64());
+        self.state.logger.debug(
+            "Scheduled delayed request",
+            &[("url", req.url.clone()), ("delay_seconds", delay_seconds)],
+        );
+        self.state.pending.fetch_add(1, Ordering::SeqCst);
+
+        let state = self.state.clone();
+        let task_state = state.clone();
+        let mut scheduled = state.scheduled_requests.lock().await;
+        scheduled.spawn(async move {
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {
+                    if task_state.stop.load(Ordering::SeqCst) {
+                        finish_request_state(task_state.as_ref());
+                        return;
+                    }
+                    if let Err(err) = task_state.queue_tx.send(req).await {
+                        task_state.logger.error(
+                            "Failed to enqueue delayed request",
+                            &[("error", err.to_string())],
+                        );
+                        finish_request_state(task_state.as_ref());
+                    }
+                }
+                _ = task_state.stop_notify.notified() => {
+                    finish_request_state(task_state.as_ref());
+                }
+            }
+        });
         Ok(())
     }
 
@@ -468,17 +565,60 @@ impl<S: Spider> Engine<S> {
         }
     }
 
-    async fn await_idle(&self) {
+    async fn await_idle_or_worker_health(&self, workers: &mut JoinSet<()>) -> SilkwormResult<()> {
         loop {
+            self.reap_scheduled_requests().await;
             if self.state.pending.load(Ordering::SeqCst) == 0 {
-                break;
+                return Ok(());
             }
-            let notified = self.state.pending_notify.notified();
-            if self.state.pending.load(Ordering::SeqCst) == 0 {
-                break;
+
+            tokio::select! {
+                _ = self.state.pending_notify.notified() => {}
+                worker = workers.join_next() => {
+                    return match worker {
+                        Some(Ok(())) => Err(SilkwormError::Spider(
+                            "worker task exited unexpectedly".to_string(),
+                        )),
+                        Some(Err(err)) => Err(SilkwormError::Spider(format!("worker task failed: {err}"))),
+                        None => Err(SilkwormError::Spider(
+                            "all worker tasks exited unexpectedly".to_string(),
+                        )),
+                    };
+                }
             }
-            notified.await;
         }
+    }
+
+    async fn join_workers(&self, workers: &mut JoinSet<()>) -> Option<SilkwormError> {
+        let mut first_error = None;
+        while let Some(res) = workers.join_next().await {
+            if let Err(err) = res {
+                self.state
+                    .logger
+                    .error("Worker task failed", &[("error", format!("{err}"))]);
+                if first_error.is_none() {
+                    first_error = Some(SilkwormError::Spider(format!("worker task failed: {err}")));
+                }
+            }
+        }
+        first_error
+    }
+
+    async fn reap_scheduled_requests(&self) {
+        let mut scheduled = self.state.scheduled_requests.lock().await;
+        while let Some(res) = scheduled.try_join_next() {
+            if let Err(err) = res {
+                self.state.logger.error(
+                    "Scheduled request task failed",
+                    &[("error", format!("{err}"))],
+                );
+            }
+        }
+    }
+
+    async fn shutdown_scheduled_requests(&self) {
+        let mut scheduled = self.state.scheduled_requests.lock().await;
+        scheduled.shutdown().await;
     }
 
     async fn shutdown(&self) {
@@ -540,11 +680,17 @@ impl<S: Spider> Engine<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Engine, EngineConfig, SeenRequests, Stats};
+    use super::{Engine, EngineConfig, SeenRequests, Stats, request_fingerprint};
     use crate::errors::SilkwormError;
-    use crate::request::SpiderResult;
+    use crate::middlewares::{MiddlewareFuture, RequestMiddleware};
+    use crate::pipelines::{ItemPipeline, PipelineFuture};
+    use crate::request::{Request, SpiderResult};
     use crate::response::HtmlResponse;
     use crate::spider::Spider;
+    use crate::types::Item;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     struct TestSpider;
 
@@ -555,6 +701,90 @@ mod tests {
 
         async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
             Ok(Vec::new())
+        }
+    }
+
+    struct StartSpider;
+
+    impl Spider for StartSpider {
+        fn name(&self) -> &str {
+            "start"
+        }
+
+        fn start_urls(&self) -> Vec<&str> {
+            vec!["https://example.com"]
+        }
+
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct CountingSpider {
+        close_calls: Arc<AtomicUsize>,
+    }
+
+    impl Spider for CountingSpider {
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+            Ok(Vec::new())
+        }
+
+        async fn close(&self) {
+            self.close_calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct PanicRequestMiddleware;
+
+    impl<S: Spider> RequestMiddleware<S> for PanicRequestMiddleware {
+        fn process_request<'a>(
+            &'a self,
+            _request: Request<S>,
+            _spider: Arc<S>,
+        ) -> MiddlewareFuture<'a, Request<S>> {
+            Box::pin(async move { panic!("middleware panic") })
+        }
+    }
+
+    struct TestPipeline {
+        close_calls: Arc<AtomicUsize>,
+        fail_close: bool,
+    }
+
+    impl TestPipeline {
+        fn new(close_calls: Arc<AtomicUsize>, fail_close: bool) -> Self {
+            TestPipeline {
+                close_calls,
+                fail_close,
+            }
+        }
+    }
+
+    impl<S: Spider> ItemPipeline<S> for TestPipeline {
+        fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, crate::SilkwormResult<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn close<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, crate::SilkwormResult<()>> {
+            Box::pin(async move {
+                self.close_calls.fetch_add(1, Ordering::SeqCst);
+                if self.fail_close {
+                    return Err(SilkwormError::Pipeline("pipeline close failed".to_string()));
+                }
+                Ok(())
+            })
+        }
+
+        fn process_item<'a>(
+            &'a self,
+            item: Item,
+            _spider: Arc<S>,
+        ) -> PipelineFuture<'a, crate::SilkwormResult<Item>> {
+            Box::pin(async move { Ok(item) })
         }
     }
 
@@ -609,6 +839,28 @@ mod tests {
     }
 
     #[test]
+    fn engine_new_rejects_zero_max_pending_requests() {
+        let config = EngineConfig::<TestSpider> {
+            concurrency: 1,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: Some(0),
+            max_seen_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+        };
+        let result = Engine::new(TestSpider, config);
+        match result {
+            Err(SilkwormError::Config(_)) => {}
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
+    #[test]
     fn seen_requests_with_limit_evicts_oldest() {
         let mut seen = SeenRequests::new(Some(2));
         assert!(seen.insert_if_new("https://a"));
@@ -616,5 +868,85 @@ mod tests {
         assert!(!seen.insert_if_new("https://a"));
         assert!(seen.insert_if_new("https://c"));
         assert!(seen.insert_if_new("https://a"));
+    }
+
+    #[test]
+    fn request_fingerprint_distinguishes_params_and_method() {
+        let get_a = Request::<()>::new("https://example.com/search")
+            .with_param("q", "rust")
+            .with_param("page", "1");
+        let get_b = Request::<()>::new("https://example.com/search")
+            .with_param("q", "rust")
+            .with_param("page", "2");
+        let post = Request::<()>::new("https://example.com/search").with_method("POST");
+
+        assert_ne!(request_fingerprint(&get_a), request_fingerprint(&get_b));
+        assert_ne!(request_fingerprint(&get_a), request_fingerprint(&post));
+    }
+
+    #[tokio::test]
+    async fn run_returns_error_when_worker_panics() {
+        let config = EngineConfig::<StartSpider> {
+            concurrency: 1,
+            request_middlewares: vec![Arc::new(PanicRequestMiddleware)],
+            response_middlewares: Vec::new(),
+            item_pipelines: Vec::new(),
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            max_seen_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+        };
+        let engine = Engine::new(StartSpider, config).expect("engine");
+
+        let run_result = tokio::time::timeout(Duration::from_secs(1), engine.run()).await;
+        assert!(run_result.is_ok(), "engine.run timed out");
+        match run_result.expect("timeout result") {
+            Err(SilkwormError::Spider(message)) => {
+                assert!(message.contains("worker task"));
+            }
+            Err(other) => panic!("expected spider error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_spider_closes_all_pipelines_even_on_error() {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let pipeline_a_calls = Arc::new(AtomicUsize::new(0));
+        let pipeline_b_calls = Arc::new(AtomicUsize::new(0));
+
+        let spider = CountingSpider {
+            close_calls: close_calls.clone(),
+        };
+        let config = EngineConfig::<CountingSpider> {
+            concurrency: 1,
+            request_middlewares: Vec::new(),
+            response_middlewares: Vec::new(),
+            item_pipelines: vec![
+                Arc::new(TestPipeline::new(pipeline_a_calls.clone(), true)),
+                Arc::new(TestPipeline::new(pipeline_b_calls.clone(), false)),
+            ],
+            request_timeout: None,
+            log_stats_interval: None,
+            max_pending_requests: None,
+            max_seen_requests: None,
+            html_max_size_bytes: 1,
+            keep_alive: false,
+        };
+
+        let engine = Engine::new(spider, config).expect("engine");
+        let result = engine.run().await;
+
+        match result {
+            Err(SilkwormError::Pipeline(_)) => {}
+            Err(other) => panic!("expected pipeline error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+
+        assert_eq!(pipeline_a_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(pipeline_b_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
     }
 }

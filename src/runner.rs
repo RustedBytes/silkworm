@@ -293,4 +293,17 @@ mod tests {
             Ok(_) => panic!("expected error, got ok"),
         }
     }
+
+    #[test]
+    fn run_spider_with_rejects_zero_max_pending_requests() {
+        let config = RunConfig::<TestSpider>::new().with_max_pending_requests(0);
+        let result = super::run_spider_with(TestSpider, config);
+        match result {
+            Err(crate::errors::SilkwormError::Config(message)) => {
+                assert!(message.contains("max_pending_requests"));
+            }
+            Err(other) => panic!("expected config error, got {other:?}"),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
 }

@@ -14,6 +14,7 @@ use crate::spider::Spider;
 use crate::types::Item;
 
 pub type MiddlewareFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(crate) const RETRY_DELAY_SECS_META_KEY: &str = "retry_delay_secs";
 
 pub trait RequestMiddleware<S: Spider>: Send + Sync {
     fn process_request<'a>(
@@ -203,7 +204,11 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
             req.meta
                 .insert("retry_times".to_string(), Item::from(retry_times + 1));
 
-            let delay = self.backoff_base * 2f64.powi(retry_times as i32);
+            let delay = if self.sleep_http_codes.contains(&status) && self.backoff_base > 0.0 {
+                self.backoff_base * 2f64.powi(retry_times as i32)
+            } else {
+                0.0
+            };
             self.logger.warn(
                 "Retrying request",
                 &[
@@ -214,8 +219,9 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
                 ],
             );
 
-            if self.sleep_http_codes.contains(&status) && delay > 0.0 {
-                sleep(Duration::from_secs_f64(delay)).await;
+            if delay > 0.0 {
+                req.meta
+                    .insert(RETRY_DELAY_SECS_META_KEY.to_string(), Item::from(delay));
             }
 
             ResponseAction::Request(req)
@@ -415,8 +421,9 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
-        RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
+        DelayMiddleware, ProxyMiddleware, RETRY_DELAY_SECS_META_KEY, RequestMiddleware,
+        ResponseAction, ResponseMiddleware, RetryMiddleware, SkipNonHtmlMiddleware,
+        UserAgentMiddleware,
     };
     use crate::request::{Request, SpiderResult};
     use crate::response::{HtmlResponse, Response};
@@ -505,6 +512,29 @@ mod tests {
                 assert_eq!(
                     req.meta.get("retry_times").and_then(|v| v.as_u64()),
                     Some(1)
+                );
+                assert!(!req.meta.contains_key(RETRY_DELAY_SECS_META_KEY));
+            }
+            ResponseAction::Response(_) => panic!("expected retry request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_middleware_sets_delay_meta_when_backoff_is_enabled() {
+        let middleware = RetryMiddleware::new(1, Some(vec![500]), Some(vec![500]), 0.5);
+        let spider = Arc::new(TestSpider);
+        let request = Request::<TestSpider>::new("https://example.com");
+        let response = base_response(request, 500);
+
+        let action = middleware.process_response(response, spider).await;
+
+        match action {
+            ResponseAction::Request(req) => {
+                assert_eq!(
+                    req.meta
+                        .get(RETRY_DELAY_SECS_META_KEY)
+                        .and_then(|value| value.as_f64()),
+                    Some(0.5)
                 );
             }
             ResponseAction::Response(_) => panic!("expected retry request"),

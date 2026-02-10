@@ -51,16 +51,17 @@ Examples:
 
 1. Engine lifecycle is: open spider -> open pipelines -> enqueue start requests
    -> run workers -> drain pending queue -> close pipelines -> close spider.
-2. Request de-duplication is based on `Request.url` unless `dont_filter` is
-   true.
+2. Request de-duplication uses request fingerprint (`method` + canonical URL
+   with merged query params) unless `dont_filter` is true.
 3. Response middlewares may return:
    - `ResponseAction::Response` to continue normal parse flow.
-   - `ResponseAction::Request` to enqueue a new request immediately.
+   - `ResponseAction::Request` to enqueue a new request (possibly delayed when
+     retry metadata is present).
 4. If a request has `callback`, engine uses that callback instead of
    `Spider::parse`.
 5. Item pipelines run sequentially in configured order for every emitted item.
-6. `html_max_size_bytes` limits how much response body is decoded/parsed into
-   `HtmlResponse`.
+6. `html_max_size_bytes` limits response bytes buffered by `HttpClient` and
+   decoded/parsed into `HtmlResponse`.
 7. `HttpClient::new` requires `concurrency > 0`.
 
 ## Coding Rules for Agents
@@ -95,9 +96,7 @@ Examples:
 ## Known Gotchas
 
 - `Request.priority` is stored but currently not used by engine scheduling.
-- De-dup happens before URL parameter merge in `HttpClient`; two requests with
-  the same `url` but different `params` will still be considered duplicates
-  unless `dont_filter` is set.
+- `max_pending_requests` must be greater than zero when configured.
 - `SkipNonHtmlMiddleware` can clear body/headers and replace callback with
   no-op; parsing assumptions must account for this.
 - XPath helpers should gracefully report disabled-feature errors when `xpath`

@@ -131,6 +131,7 @@ impl<S> Response<S> {
         hrefs
             .into_iter()
             .flatten()
+            .filter(|href| !href.as_ref().is_empty())
             .map(|href| self.follow(href.as_ref(), callback.clone()))
             .collect()
     }
@@ -992,7 +993,7 @@ mod tests {
             body: Bytes::new(),
             request,
         };
-        let hrefs = vec![Some("/one"), None, Some("two")];
+        let hrefs = vec![Some("/one"), None, Some(""), Some("two")];
         let requests = response.follow_all(hrefs, None);
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].url, "https://example.com/one");

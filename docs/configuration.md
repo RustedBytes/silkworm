@@ -9,9 +9,11 @@ Key settings:
 - `concurrency`: number of worker tasks and HTTP concurrency.
 - `request_timeout`: per-request timeout override.
 - `log_stats_interval`: optional periodic stats logging.
-- `max_pending_requests`: size of the request queue.
+- `max_pending_requests`: size of the request queue (must be greater than 0
+  when set).
 - `max_seen_requests`: optional cap for the in-memory de-duplication set.
-- `html_max_size_bytes`: maximum HTML bytes to parse into HtmlResponse.
+- `html_max_size_bytes`: maximum response body bytes buffered by the HTTP
+  client and parsed into `HtmlResponse`.
 - `keep_alive`: adds `Connection: keep-alive` header when missing.
 - `request_middlewares`, `response_middlewares`, `item_pipelines`.
 
@@ -60,9 +62,12 @@ silkworm::run_spider(QuotesSpider)?;
 
 ## HtmlResponse Limits
 
-`html_max_size_bytes` is applied when converting a `Response` into an
-`HtmlResponse`. If the body exceeds the limit, only the initial slice is
-decoded and parsed.
+`html_max_size_bytes` limits two stages:
+
+- HTTP body buffering in `HttpClient`.
+- HTML decoding/parsing when converting `Response` into `HtmlResponse`.
+
+If the response body exceeds the limit, only the initial slice is retained.
 
 Code:
 - HtmlResponse creation: `../src/response.rs`

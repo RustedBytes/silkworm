@@ -46,7 +46,7 @@ Important fields:
 - `timeout` (overrides global timeout)
 - `meta` for metadata (used by middlewares like `proxy`, `retry_times`)
 - `callback` to override the spider's `parse` method
-- `dont_filter` to bypass de-duplication
+- `dont_filter` to bypass de-duplication (method + canonical URL)
 - `priority` (stored on the request; not used by the engine today)
 
 Convenience APIs:

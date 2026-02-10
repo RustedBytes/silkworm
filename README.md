@@ -10,7 +10,8 @@ structured logging so you can focus on crawling.
 
 ## Features
 
-- Async engine with configurable concurrency, queue limits, and request de-dupe.
+- Async engine with configurable concurrency, queue limits, and request de-dupe
+  (method + canonical URL).
 - Minimal Spider/Request/Response model with follow helpers and callback
   overrides.
 - HTML helpers for CSS and XPath (`select`, `select_first`, `xpath`,
@@ -221,6 +222,9 @@ let config = RunConfig::new()
     .with_html_max_size_bytes(2_000_000)
     .with_keep_alive(true);
 ```
+
+`max_pending_requests` must be greater than `0` when set.  
+`html_max_size_bytes` also bounds how many bytes the HTTP client buffers per response.
 
 ## Logging
 
