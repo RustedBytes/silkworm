@@ -54,7 +54,9 @@ Code:
 
 ### DelayMiddleware
 
-Adds a delay before a request is sent. Strategies include:
+Adds a delay before a request is sent. Delay metadata is attached to the
+request and the engine schedules it without blocking worker tasks. Strategies
+include:
 
 - Fixed delay
 - Random range delay

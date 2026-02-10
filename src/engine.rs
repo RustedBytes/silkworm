@@ -15,6 +15,9 @@ use crate::pipelines::ItemPipeline;
 use crate::request::{Request, SpiderOutput};
 use crate::response::Response;
 use crate::spider::Spider;
+use crate::types::Item;
+
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct Stats {
     start_time: OnceLock<Instant>,
@@ -177,6 +180,8 @@ struct EngineState<S: Spider> {
     http: HttpClient,
     queue_tx: mpsc::Sender<QueuedRequest<S>>,
     queue_rx: AsyncMutex<Option<mpsc::Receiver<QueuedRequest<S>>>>,
+    item_tx: mpsc::Sender<Item>,
+    item_rx: AsyncMutex<Option<mpsc::Receiver<Item>>>,
     ready_queue: AsyncMutex<BinaryHeap<QueuedRequest<S>>>,
     ready_notify: Notify,
     enqueue_sequence: AtomicU64,
@@ -185,6 +190,8 @@ struct EngineState<S: Spider> {
     stop: AtomicBool,
     pending: AtomicUsize,
     pending_notify: Notify,
+    item_pending: AtomicUsize,
+    item_pending_notify: Notify,
     stop_notify: Notify,
     request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
     response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
@@ -237,19 +244,32 @@ fn finish_request_state<S: Spider>(state: &EngineState<S>) {
     state.pending_notify.notify_waiters();
 }
 
+fn finish_item_state<S: Spider>(state: &EngineState<S>) {
+    let _ = state
+        .item_pending
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            Some(value.saturating_sub(1))
+        });
+    state.item_pending_notify.notify_waiters();
+}
+
 fn next_queue_sequence<S: Spider>(state: &EngineState<S>) -> u64 {
     state.enqueue_sequence.fetch_add(1, Ordering::SeqCst)
 }
 
 fn request_fingerprint<S>(req: &Request<S>) -> String {
     let method = req.method.trim().to_ascii_uppercase();
-    let merged_url = crate::http::build_url_with_params(req.url.as_str(), &req.params)
+    let merged_url = crate::http::canonical_url_with_params(req.url.as_str(), &req.params)
         .unwrap_or_else(|_| req.url.clone());
     format!("{method} {merged_url}")
 }
 
 fn take_retry_delay<S>(req: &mut Request<S>) -> Option<Duration> {
     req.take_retry_delay_secs().map(Duration::from_secs_f64)
+}
+
+fn take_request_delay<S>(req: &mut Request<S>) -> Option<Duration> {
+    req.take_request_delay_secs().map(Duration::from_secs_f64)
 }
 
 impl<S: Spider> Engine<S> {
@@ -278,6 +298,7 @@ impl<S: Spider> Engine<S> {
         }
         let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
         let (queue_tx, queue_rx) = mpsc::channel(queue_size);
+        let (item_tx, item_rx) = mpsc::channel(queue_size);
         let http = HttpClient::new(
             concurrency,
             crate::types::Headers::new(),
@@ -294,6 +315,8 @@ impl<S: Spider> Engine<S> {
             http,
             queue_tx,
             queue_rx: AsyncMutex::new(Some(queue_rx)),
+            item_tx,
+            item_rx: AsyncMutex::new(Some(item_rx)),
             ready_queue: AsyncMutex::new(BinaryHeap::new()),
             ready_notify: Notify::new(),
             enqueue_sequence: AtomicU64::new(0),
@@ -302,6 +325,8 @@ impl<S: Spider> Engine<S> {
             stop: AtomicBool::new(false),
             pending: AtomicUsize::new(0),
             pending_notify: Notify::new(),
+            item_pending: AtomicUsize::new(0),
+            item_pending_notify: Notify::new(),
             stop_notify: Notify::new(),
             request_middlewares,
             response_middlewares,
@@ -325,6 +350,7 @@ impl<S: Spider> Engine<S> {
         self.state.stats.set_start_time(Instant::now());
 
         let mut dispatcher = self.spawn_dispatcher().await?;
+        let mut item_worker = self.spawn_item_worker().await?;
 
         let mut join_set = JoinSet::new();
         for _ in 0..self.state.http.concurrency {
@@ -357,7 +383,7 @@ impl<S: Spider> Engine<S> {
                 .error("Failed to open spider", &[("error", err.to_string())]);
             run_error = Some(err);
         } else if let Err(err) = self
-            .await_idle_or_worker_health(&mut join_set, &dispatcher)
+            .await_idle_or_worker_health(&mut join_set, &dispatcher, &mut item_worker)
             .await
         {
             self.state
@@ -375,6 +401,12 @@ impl<S: Spider> Engine<S> {
             }
         } else {
             let _ = self.join_workers(&mut join_set).await;
+        }
+
+        if let Some(err) = self.join_item_worker(&mut item_worker).await
+            && run_error.is_none()
+        {
+            run_error = Some(err);
         }
 
         if let Some(err) = self.join_dispatcher(&mut dispatcher).await
@@ -524,6 +556,17 @@ impl<S: Spider> Engine<S> {
         Ok(())
     }
 
+    async fn enqueue_item(&self, item: Item) -> SilkwormResult<()> {
+        self.state.item_pending.fetch_add(1, Ordering::SeqCst);
+        if let Err(err) = self.state.item_tx.send(item).await {
+            finish_item_state(self.state.as_ref());
+            return Err(SilkwormError::Pipeline(format!(
+                "Failed to enqueue item for pipelines: {err}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn worker(self) {
         loop {
             let Some(req) = self.next_ready_request().await else {
@@ -570,6 +613,55 @@ impl<S: Spider> Engine<S> {
                         state.ready_notify.notify_one();
                     }
                     _ = state.stop_notify.notified() => break,
+                    _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
+                }
+            }
+        }))
+    }
+
+    async fn spawn_item_worker(&self) -> SilkwormResult<tokio::task::JoinHandle<()>> {
+        let mut rx_slot = self.state.item_rx.lock().await;
+        let Some(mut receiver) = rx_slot.take() else {
+            return Err(SilkwormError::Spider(
+                "item worker already started".to_string(),
+            ));
+        };
+
+        let state = self.state.clone();
+        Ok(tokio::spawn(async move {
+            loop {
+                if state.stop.load(Ordering::SeqCst) {
+                    while receiver.try_recv().is_ok() {
+                        finish_item_state(state.as_ref());
+                    }
+                    break;
+                }
+                tokio::select! {
+                    maybe_item = receiver.recv() => {
+                        let Some(item) = maybe_item else { break };
+                        let mut current = item;
+                        for pipe in &state.item_pipelines {
+                            match pipe.process_item(current, state.spider.clone()).await {
+                                Ok(next) => current = next,
+                                Err(err) => {
+                                    state.stats.errors.fetch_add(1, Ordering::SeqCst);
+                                    state.logger.error(
+                                        "Failed to process item",
+                                        &[("error", err.to_string())],
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        finish_item_state(state.as_ref());
+                    }
+                    _ = state.stop_notify.notified() => {
+                        while receiver.try_recv().is_ok() {
+                            finish_item_state(state.as_ref());
+                        }
+                        break;
+                    }
+                    _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
                 }
             }
         }))
@@ -591,6 +683,7 @@ impl<S: Spider> Engine<S> {
             tokio::select! {
                 _ = self.state.ready_notify.notified() => {}
                 _ = self.state.stop_notify.notified() => return None,
+                _ = tokio::time::sleep(STOP_POLL_INTERVAL) => {}
             }
         }
     }
@@ -600,6 +693,12 @@ impl<S: Spider> Engine<S> {
         for mw in &self.state.request_middlewares {
             req = mw.process_request(req, self.state.spider.clone()).await;
         }
+
+        if let Some(delay) = take_request_delay(&mut req) {
+            self.enqueue_delayed(req, delay).await?;
+            return Ok(());
+        }
+
         self.state
             .stats
             .requests_sent
@@ -647,12 +746,7 @@ impl<S: Spider> Engine<S> {
                                 .stats
                                 .items_scraped
                                 .fetch_add(1, Ordering::SeqCst);
-                            let mut current = item;
-                            for pipe in &self.state.item_pipelines {
-                                current = pipe
-                                    .process_item(current, self.state.spider.clone())
-                                    .await?;
-                            }
+                            self.enqueue_item(item).await?;
                         }
                     }
                 }
@@ -665,10 +759,13 @@ impl<S: Spider> Engine<S> {
         &self,
         workers: &mut JoinSet<()>,
         dispatcher: &tokio::task::JoinHandle<()>,
+        item_worker: &mut tokio::task::JoinHandle<()>,
     ) -> SilkwormResult<()> {
         loop {
             self.reap_scheduled_requests().await;
-            if self.state.pending.load(Ordering::SeqCst) == 0 {
+            if self.state.pending.load(Ordering::SeqCst) == 0
+                && self.state.item_pending.load(Ordering::SeqCst) == 0
+            {
                 return Ok(());
             }
             if dispatcher.is_finished() {
@@ -676,9 +773,15 @@ impl<S: Spider> Engine<S> {
                     "request dispatcher exited unexpectedly".to_string(),
                 ));
             }
+            if item_worker.is_finished() {
+                return Err(SilkwormError::Spider(
+                    "item worker exited unexpectedly".to_string(),
+                ));
+            }
 
             tokio::select! {
                 _ = self.state.pending_notify.notified() => {}
+                _ = self.state.item_pending_notify.notified() => {}
                 worker = workers.join_next() => {
                     return match worker {
                         Some(Ok(())) => Err(SilkwormError::Spider(
@@ -688,6 +791,14 @@ impl<S: Spider> Engine<S> {
                         None => Err(SilkwormError::Spider(
                             "all worker tasks exited unexpectedly".to_string(),
                         )),
+                    };
+                }
+                item = &mut *item_worker => {
+                    return match item {
+                        Ok(()) => Err(SilkwormError::Spider(
+                            "item worker exited unexpectedly".to_string(),
+                        )),
+                        Err(err) => Err(SilkwormError::Spider(format!("item worker failed: {err}"))),
                     };
                 }
             }
@@ -724,6 +835,21 @@ impl<S: Spider> Engine<S> {
             }
         }
         first_error
+    }
+
+    async fn join_item_worker(
+        &self,
+        item_worker: &mut tokio::task::JoinHandle<()>,
+    ) -> Option<SilkwormError> {
+        match item_worker.await {
+            Ok(()) => None,
+            Err(err) => {
+                self.state
+                    .logger
+                    .error("Item worker failed", &[("error", format!("{err}"))]);
+                Some(SilkwormError::Spider(format!("item worker failed: {err}")))
+            }
+        }
     }
 
     async fn reap_scheduled_requests(&self) {
@@ -772,6 +898,7 @@ impl<S: Spider> Engine<S> {
         let items_scraped = self.state.stats.items_scraped.load(Ordering::SeqCst);
         let errors = self.state.stats.errors.load(Ordering::SeqCst);
         let pending = self.state.pending.load(Ordering::SeqCst);
+        let pending_items = self.state.item_pending.load(Ordering::SeqCst);
         let seen = self.state.seen_count.load(Ordering::SeqCst);
         let rate = if elapsed > 0.0 {
             requests_sent as f64 / elapsed
@@ -786,6 +913,7 @@ impl<S: Spider> Engine<S> {
             ("items_scraped", items_scraped.to_string()),
             ("errors", errors.to_string()),
             ("pending_requests", pending.to_string()),
+            ("pending_items", pending_items.to_string()),
             ("requests_per_second", format!("{:.2}", rate)),
             ("seen_requests", seen.to_string()),
         ];
@@ -1034,6 +1162,16 @@ mod tests {
 
         assert_ne!(request_fingerprint(&get_a), request_fingerprint(&get_b));
         assert_ne!(request_fingerprint(&get_a), request_fingerprint(&post));
+    }
+
+    #[test]
+    fn request_fingerprint_keeps_duplicate_query_values() {
+        let req_a = Request::<()>::new("https://example.com/search?tag=b&tag=a&x=1");
+        let req_b = Request::<()>::new("https://example.com/search?x=1&tag=a&tag=b");
+        let req_c = Request::<()>::new("https://example.com/search?tag=a&x=1");
+
+        assert_eq!(request_fingerprint(&req_a), request_fingerprint(&req_b));
+        assert_ne!(request_fingerprint(&req_a), request_fingerprint(&req_c));
     }
 
     #[tokio::test]

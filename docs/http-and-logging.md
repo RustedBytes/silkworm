@@ -34,10 +34,15 @@ outside of the spider engine:
 - `fetch_document`: returns only the parsed document.
 - `fetch_html_with` / `fetch_document_with`: same helpers with configurable
   `UtilityFetchOptions`.
+- `UtilityFetcher`: reusable helper that keeps one configured HTTP client for
+  multiple calls.
 
-These functions use a shared, lazily initialized `HttpClient`.
-They apply safety defaults: 15-second timeout,
-redirect following, and a 2 MB response-body cap.
+`fetch_html` and `fetch_document` use a shared, lazily initialized default
+`HttpClient`. `fetch_*_with` builds a client from the provided options for that
+call. Use `UtilityFetcher` when you want to reuse custom options across many
+requests.
+Default safety options are 15-second timeout, redirect following, and a 2 MB
+response-body cap.
 
 Code:
 - Utility API: `../src/api.rs`
@@ -56,6 +61,17 @@ let options = UtilityFetchOptions::new()
     .with_html_max_size_bytes(512_000)
     .with_header("User-Agent", "silkworm-rs/docs-example");
 let (html, doc) = fetch_html_with("https://example.com", options).await?;
+```
+
+```rust
+use std::time::Duration;
+use silkworm::{UtilityFetchOptions, UtilityFetcher};
+
+let options = UtilityFetchOptions::new()
+    .with_timeout(Duration::from_secs(8))
+    .with_header("User-Agent", "silkworm-rs/docs-example");
+let fetcher = UtilityFetcher::new(options)?;
+let (html, doc) = fetcher.fetch_html("https://example.com").await?;
 ```
 
 ## Header Model Evaluation

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
@@ -236,13 +236,7 @@ pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResul
     let mut parsed = Url::parse(url)
         .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
 
-    let mut merged: BTreeMap<String, String> = parsed
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    for (key, value) in params {
-        merged.insert(key.clone(), value.clone());
-    }
+    let merged = merged_query_pairs(&parsed, params);
 
     parsed.query_pairs_mut().clear();
     {
@@ -253,6 +247,46 @@ pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResul
     }
 
     Ok(parsed.to_string())
+}
+
+pub(crate) fn canonical_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
+    let mut parsed = Url::parse(url)
+        .map_err(|err| SilkwormError::Http(format!("Invalid URL {}: {}", url, err)))?;
+    let mut merged = merged_query_pairs(&parsed, params);
+    merged.sort();
+
+    parsed.query_pairs_mut().clear();
+    {
+        let mut pairs = parsed.query_pairs_mut();
+        for (key, value) in merged {
+            pairs.append_pair(&key, &value);
+        }
+    }
+
+    Ok(parsed.to_string())
+}
+
+fn merged_query_pairs(url: &Url, params: &Params) -> Vec<(String, String)> {
+    let mut merged: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+
+    if params.is_empty() {
+        return merged;
+    }
+
+    merged.retain(|(key, _)| !params.contains_key(key));
+
+    // HashMap iteration order is nondeterministic; keep appended params stable.
+    let mut additions: Vec<(String, String)> = params
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    additions.sort();
+    merged.extend(additions);
+
+    merged
 }
 
 async fn read_response_body_limited(
@@ -353,7 +387,10 @@ fn header_value_case_insensitive<'a>(headers: &'a Headers, name: &str) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpClient, normalize_headers, redirect_request, resolve_redirect_url};
+    use super::{
+        HttpClient, canonical_url_with_params, normalize_headers, redirect_request,
+        resolve_redirect_url,
+    };
     use crate::request::Request;
     use crate::types::{Headers, Item};
     use std::collections::HashMap;
@@ -404,6 +441,43 @@ mod tests {
         let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
         assert_eq!(query.get("foo"), Some(&"baz".to_string()));
         assert_eq!(query.get("q"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn build_url_preserves_repeated_query_keys() {
+        let client =
+            HttpClient::new(1, Headers::new(), None, 1024, false, 3, false).expect("client");
+        let req =
+            Request::<()>::new("https://example.com/path?tag=a&tag=b&x=1").with_param("q", "1");
+        let built = client.build_url(&req).expect("build url");
+        let parsed = url::Url::parse(&built).expect("parse url");
+        let tags: Vec<String> = parsed
+            .query_pairs()
+            .filter_map(|(k, v)| (k == "tag").then(|| v.into_owned()))
+            .collect();
+
+        assert_eq!(tags, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn canonical_url_sorts_query_pairs_without_dropping_duplicates() {
+        let params = [("z".to_string(), "9".to_string())]
+            .into_iter()
+            .collect::<crate::types::Params>();
+        let canonical = canonical_url_with_params("https://example.com/path?b=2&a=1&b=1", &params)
+            .expect("canonical");
+        let parsed = url::Url::parse(&canonical).expect("parse canonical");
+        let query: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(
+            query,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string()),
+                ("z".to_string(), "9".to_string())
+            ]
+        );
     }
 
     #[test]

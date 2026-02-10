@@ -281,6 +281,24 @@ async fn main() -> silkworm::SilkwormResult<()> {
 }
 ```
 
+For repeated calls with the same custom options, build a reusable
+`UtilityFetcher` once:
+
+```rust
+use std::time::Duration;
+use silkworm::{UtilityFetchOptions, UtilityFetcher};
+
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
+    let options = UtilityFetchOptions::new()
+        .with_timeout(Duration::from_secs(8))
+        .with_header("User-Agent", "silkworm-rs/readme-example");
+    let fetcher = UtilityFetcher::new(options)?;
+    let (text, document) = fetcher.fetch_html("https://example.com").await?;
+    Ok(())
+}
+```
+
 If you only need a parsed document:
 
 ```rust

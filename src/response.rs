@@ -1,6 +1,7 @@
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 
@@ -248,10 +249,7 @@ impl<S> HtmlResponse<S> {
         let doc = self.document();
         let mut out = Vec::new();
         for element in doc.select(selector) {
-            out.push(HtmlElement {
-                html: element.html(),
-                attrs: element_attrs(&element),
-            });
+            out.push(HtmlElement::new(element.html(), element_attrs(&element)));
         }
         out
     }
@@ -261,10 +259,7 @@ impl<S> HtmlResponse<S> {
         let doc = scraper::Html::parse_document(self.html_source());
         let mut out = Vec::new();
         for element in doc.select(selector) {
-            out.push(HtmlElement {
-                html: element.html(),
-                attrs: element_attrs(&element),
-            });
+            out.push(HtmlElement::new(element.html(), element_attrs(&element)));
         }
         out
     }
@@ -272,19 +267,17 @@ impl<S> HtmlResponse<S> {
     #[cfg(feature = "scraper-atomic")]
     pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
         let doc = self.document();
-        doc.select(selector).next().map(|element| HtmlElement {
-            html: element.html(),
-            attrs: element_attrs(&element),
-        })
+        doc.select(selector)
+            .next()
+            .map(|element| HtmlElement::new(element.html(), element_attrs(&element)))
     }
 
     #[cfg(not(feature = "scraper-atomic"))]
     pub fn select_first_with(&self, selector: &scraper::Selector) -> Option<HtmlElement> {
         let doc = scraper::Html::parse_document(self.html_source());
-        doc.select(selector).next().map(|element| HtmlElement {
-            html: element.html(),
-            attrs: element_attrs(&element),
-        })
+        doc.select(selector)
+            .next()
+            .map(|element| HtmlElement::new(element.html(), element_attrs(&element)))
     }
 
     #[cfg(feature = "scraper-atomic")]
@@ -502,25 +495,50 @@ impl<S> DerefMut for HtmlResponse<S> {
     }
 }
 
-#[derive(Clone)]
 pub struct HtmlElement {
     html: String,
     attrs: HashMap<String, String>,
+    text_cache: OnceLock<String>,
+    fallback_attrs: OnceLock<HashMap<String, String>>,
+}
+
+impl Clone for HtmlElement {
+    fn clone(&self) -> Self {
+        HtmlElement {
+            html: self.html.clone(),
+            attrs: self.attrs.clone(),
+            text_cache: OnceLock::new(),
+            fallback_attrs: OnceLock::new(),
+        }
+    }
 }
 
 impl HtmlElement {
+    fn new(html: String, attrs: HashMap<String, String>) -> Self {
+        HtmlElement {
+            html,
+            attrs,
+            text_cache: OnceLock::new(),
+            fallback_attrs: OnceLock::new(),
+        }
+    }
+
     pub fn html(&self) -> &str {
         &self.html
     }
 
     pub fn text(&self) -> String {
-        let doc = scraper::Html::parse_fragment(&self.html);
-        if let Some(selector) = select_all_selector()
-            && let Some(element) = doc.select(selector).next()
-        {
-            return element.text().collect::<String>();
-        }
-        self.html.clone()
+        self.text_cache
+            .get_or_init(|| {
+                let doc = scraper::Html::parse_fragment(&self.html);
+                if let Some(selector) = select_all_selector()
+                    && let Some(element) = doc.select(selector).next()
+                {
+                    return element.text().collect::<String>();
+                }
+                self.html.clone()
+            })
+            .clone()
     }
 
     pub fn attr(&self, name: &str) -> Option<String> {
@@ -528,15 +546,16 @@ impl HtmlElement {
             return Some(value.clone());
         }
 
-        let doc = scraper::Html::parse_fragment(&self.html);
-        if let Some(selector) = select_all_selector() {
-            for element in doc.select(selector) {
-                if let Some(value) = element.value().attr(name) {
-                    return Some(value.to_string());
-                }
+        let fallback_attrs = self.fallback_attrs.get_or_init(|| {
+            let doc = scraper::Html::parse_fragment(&self.html);
+            if let Some(selector) = select_all_selector()
+                && let Some(element) = doc.select(selector).next()
+            {
+                return element_attrs(&element);
             }
-        }
-        None
+            HashMap::new()
+        });
+        fallback_attrs.get(name).cloned()
     }
 
     #[inline]
@@ -621,10 +640,7 @@ impl HtmlElement {
         let doc = scraper::Html::parse_fragment(source);
         let mut out = Vec::new();
         for element in doc.select(selector) {
-            out.push(HtmlElement {
-                html: element.html(),
-                attrs: element_attrs(&element),
-            });
+            out.push(HtmlElement::new(element.html(), element_attrs(&element)));
         }
         out
     }
@@ -634,10 +650,9 @@ impl HtmlElement {
         selector: &scraper::Selector,
     ) -> Option<HtmlElement> {
         let doc = scraper::Html::parse_fragment(source);
-        doc.select(selector).next().map(|element| HtmlElement {
-            html: element.html(),
-            attrs: element_attrs(&element),
-        })
+        doc.select(selector)
+            .next()
+            .map(|element| HtmlElement::new(element.html(), element_attrs(&element)))
     }
 
     fn select_texts_from_source(source: &str, selector: &str) -> Vec<String> {
@@ -744,23 +759,11 @@ fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
         Value::Nodeset(nodeset) => nodeset
             .document_order()
             .into_iter()
-            .map(|node| HtmlElement {
-                html: xpath_node_to_html(node),
-                attrs: HashMap::new(),
-            })
+            .map(|node| HtmlElement::new(xpath_node_to_html(node), HashMap::new()))
             .collect(),
-        Value::Boolean(value) => vec![HtmlElement {
-            html: value.to_string(),
-            attrs: HashMap::new(),
-        }],
-        Value::Number(value) => vec![HtmlElement {
-            html: value.to_string(),
-            attrs: HashMap::new(),
-        }],
-        Value::String(value) => vec![HtmlElement {
-            html: value,
-            attrs: HashMap::new(),
-        }],
+        Value::Boolean(value) => vec![HtmlElement::new(value.to_string(), HashMap::new())],
+        Value::Number(value) => vec![HtmlElement::new(value.to_string(), HashMap::new())],
+        Value::String(value) => vec![HtmlElement::new(value, HashMap::new())],
     }
 }
 
@@ -880,6 +883,81 @@ fn escape_attr(input: &str) -> String {
 }
 
 fn decode_body(body: &[u8], headers: &Headers) -> (String, String) {
+    if body.is_empty() {
+        return (String::new(), "utf-8".to_string());
+    }
+
+    if body.len() <= DECODE_CACHE_MAX_BYTES {
+        let key = decode_cache_key(body, headers);
+        if let Some(decoded) = decode_cache_get(key) {
+            return decoded;
+        }
+        let decoded = decode_body_uncached(body, headers);
+        decode_cache_put(key, decoded.0.clone(), decoded.1.clone());
+        return decoded;
+    }
+
+    decode_body_uncached(body, headers)
+}
+
+const DECODE_CACHE_CAPACITY: usize = 8;
+const DECODE_CACHE_MAX_BYTES: usize = 256 * 1024;
+
+struct DecodeCacheEntry {
+    key: u64,
+    text: String,
+    encoding: String,
+}
+
+thread_local! {
+    static DECODE_CACHE: std::cell::RefCell<VecDeque<DecodeCacheEntry>> =
+        const { std::cell::RefCell::new(VecDeque::new()) };
+}
+
+fn decode_cache_key(body: &[u8], headers: &Headers) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    body.hash(&mut hasher);
+    if let Some(content_type) = header_value_case_insensitive(headers, "content-type") {
+        content_type.to_ascii_lowercase().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn decode_cache_get(key: u64) -> Option<(String, String)> {
+    DECODE_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+        if let Some(position) = cache.iter().position(|entry| entry.key == key) {
+            if position != 0
+                && let Some(entry) = cache.remove(position)
+            {
+                cache.push_front(entry);
+            }
+            return cache
+                .front()
+                .map(|entry| (entry.text.clone(), entry.encoding.clone()));
+        }
+        None
+    })
+}
+
+fn decode_cache_put(key: u64, text: String, encoding: String) {
+    DECODE_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+        if let Some(position) = cache.iter().position(|entry| entry.key == key) {
+            cache.remove(position);
+        }
+        cache.push_front(DecodeCacheEntry {
+            key,
+            text,
+            encoding,
+        });
+        while cache.len() > DECODE_CACHE_CAPACITY {
+            cache.pop_back();
+        }
+    });
+}
+
+fn decode_body_uncached(body: &[u8], headers: &Headers) -> (String, String) {
     if body.is_empty() {
         return (String::new(), "utf-8".to_string());
     }

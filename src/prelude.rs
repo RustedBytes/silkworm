@@ -1,4 +1,4 @@
-pub use crate::api::UtilityFetchOptions;
+pub use crate::api::{UtilityFetchOptions, UtilityFetcher};
 pub use crate::middlewares::{
     DelayMiddleware, MiddlewareFuture, ProxyMiddleware, RequestMiddleware, ResponseAction,
     ResponseMiddleware, RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,

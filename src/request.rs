@@ -19,6 +19,8 @@ pub mod meta_keys {
     pub const PROXY: &str = "proxy";
     pub const RETRY_TIMES: &str = "retry_times";
     pub const RETRY_DELAY_SECS: &str = "retry_delay_secs";
+    pub const REQUEST_DELAY_SECS: &str = "request_delay_secs";
+    pub const REQUEST_DELAY_SCHEDULED: &str = "request_delay_scheduled";
     pub const REDIRECT_TIMES: &str = "redirect_times";
 }
 
@@ -230,6 +232,11 @@ impl<S> Request<S> {
     }
 
     #[inline]
+    pub fn take_meta_bool(&mut self, key: &str) -> Option<bool> {
+        self.meta.remove(key).and_then(|value| value.as_bool())
+    }
+
+    #[inline]
     pub fn proxy(&self) -> Option<&str> {
         self.meta_str(meta_keys::PROXY)
     }
@@ -283,6 +290,43 @@ impl<S> Request<S> {
     pub fn take_retry_delay_secs(&mut self) -> Option<f64> {
         self.take_meta_f64(meta_keys::RETRY_DELAY_SECS)
             .filter(|delay_secs| *delay_secs > 0.0)
+    }
+
+    #[inline]
+    pub fn request_delay_secs(&self) -> Option<f64> {
+        self.meta_f64(meta_keys::REQUEST_DELAY_SECS)
+    }
+
+    #[inline]
+    pub fn set_request_delay_secs(&mut self, delay_secs: f64) {
+        if delay_secs > 0.0 {
+            self.meta.insert(
+                meta_keys::REQUEST_DELAY_SECS.to_string(),
+                Item::from(delay_secs),
+            );
+        } else {
+            self.meta.remove(meta_keys::REQUEST_DELAY_SECS);
+        }
+    }
+
+    #[inline]
+    pub fn take_request_delay_secs(&mut self) -> Option<f64> {
+        self.take_meta_f64(meta_keys::REQUEST_DELAY_SECS)
+            .filter(|delay_secs| *delay_secs > 0.0)
+    }
+
+    #[inline]
+    pub fn mark_request_delay_scheduled(&mut self) {
+        self.meta.insert(
+            meta_keys::REQUEST_DELAY_SCHEDULED.to_string(),
+            Item::Bool(true),
+        );
+    }
+
+    #[inline]
+    pub fn take_request_delay_scheduled(&mut self) -> bool {
+        self.take_meta_bool(meta_keys::REQUEST_DELAY_SCHEDULED)
+            .unwrap_or(false)
     }
 
     #[inline]
@@ -546,6 +590,14 @@ mod tests {
         assert_eq!(req.retry_delay_secs(), Some(0.75));
         assert_eq!(req.take_retry_delay_secs(), Some(0.75));
         assert!(req.retry_delay_secs().is_none());
+
+        req.set_request_delay_secs(0.2);
+        assert_eq!(req.request_delay_secs(), Some(0.2));
+        assert_eq!(req.take_request_delay_secs(), Some(0.2));
+        assert!(req.request_delay_secs().is_none());
+        req.mark_request_delay_scheduled();
+        assert!(req.take_request_delay_scheduled());
+        assert!(!req.take_request_delay_scheduled());
 
         assert_eq!(req.redirect_times(), 0);
         assert_eq!(req.increment_redirect_times(), 1);

@@ -62,6 +62,8 @@ for req in self.state.spider.start_requests().await {
   backpressure.
 - A dispatcher task moves requests into an internal priority queue consumed by
   workers (higher `Request.priority` first, FIFO for equal priorities).
+- Scraped items are pushed to a separate bounded queue and processed by a
+  dedicated item worker, so pipeline I/O does not block HTTP workers.
 
 Relevant code:
 - Queue creation and config: `../src/engine.rs`
@@ -96,6 +98,8 @@ timeouts, proxies, or meta values. The HTTP client merges default headers
 with request headers and applies a request-specific timeout when set. If
 `keep_alive` is enabled, it injects `Connection: keep-alive` when the header
 is not already present.
+Delay middleware now schedules delayed requeue via request metadata, so workers
+are not blocked by `sleep`.
 
 ```rust
 for mw in &self.state.request_middlewares {

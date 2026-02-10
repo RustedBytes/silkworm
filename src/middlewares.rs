@@ -2,10 +2,9 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rand::RngExt;
-use tokio::time::sleep;
 
 use crate::logging::get_logger;
 use crate::request::{Callback, Request};
@@ -83,7 +82,7 @@ impl<S: Spider> RequestMiddleware<S> for UserAgentMiddleware {
 pub struct ProxyMiddleware {
     proxies: Vec<String>,
     random_selection: bool,
-    index: std::sync::Mutex<usize>,
+    index: AtomicUsize,
     logger: crate::logging::Logger,
 }
 
@@ -92,7 +91,7 @@ impl ProxyMiddleware {
         ProxyMiddleware {
             proxies,
             random_selection,
-            index: std::sync::Mutex::new(0),
+            index: AtomicUsize::new(0),
             logger: get_logger("ProxyMiddleware", None),
         }
     }
@@ -124,10 +123,8 @@ impl<S: Spider> RequestMiddleware<S> for ProxyMiddleware {
                 let idx = rng.random_range(0..self.proxies.len());
                 self.proxies[idx].clone()
             } else {
-                let mut guard = self.index.lock().expect("proxy index lock");
-                let proxy = self.proxies[*guard % self.proxies.len()].clone();
-                *guard = (*guard + 1) % self.proxies.len();
-                proxy
+                let idx = self.index.fetch_add(1, Ordering::Relaxed);
+                self.proxies[idx % self.proxies.len()].clone()
             };
             request = request.with_proxy(proxy.clone());
             self.logger.debug("Assigned proxy", &[("proxy", proxy)]);
@@ -260,10 +257,14 @@ impl<S: Spider> DelayMiddleware<S> {
 impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
     fn process_request<'a>(
         &'a self,
-        request: Request<S>,
+        mut request: Request<S>,
         spider: Arc<S>,
     ) -> MiddlewareFuture<'a, Request<S>> {
         Box::pin(async move {
+            if request.take_request_delay_scheduled() {
+                return request;
+            }
+
             let delay = match &self.strategy {
                 DelayStrategy::Fixed(value) => *value,
                 DelayStrategy::Random(min_delay, max_delay) => {
@@ -279,13 +280,14 @@ impl<S: Spider> RequestMiddleware<S> for DelayMiddleware<S> {
 
             if delay > 0.0 {
                 self.logger.debug(
-                    "Delaying request",
+                    "Scheduling request delay",
                     &[
                         ("url", request.url.clone()),
                         ("delay", format!("{:.3}", delay)),
                     ],
                 );
-                sleep(Duration::from_secs_f64(delay)).await;
+                request.set_request_delay_secs(delay);
+                request.mark_request_delay_scheduled();
             }
 
             request
@@ -407,7 +409,7 @@ mod tests {
         DelayMiddleware, ProxyMiddleware, RequestMiddleware, ResponseAction, ResponseMiddleware,
         RetryMiddleware, SkipNonHtmlMiddleware, UserAgentMiddleware,
     };
-    use crate::request::{Request, SpiderResult};
+    use crate::request::{Request, SpiderResult, meta_keys};
     use crate::response::{HtmlResponse, Response};
     use crate::spider::Spider;
     use crate::types::Headers;
@@ -539,5 +541,30 @@ mod tests {
         assert_eq!(delayed.url, request.url);
         assert_eq!(delayed.method, request.method);
         assert_eq!(delayed.headers.len(), request.headers.len());
+    }
+
+    #[tokio::test]
+    async fn delay_middleware_marks_request_for_engine_scheduling() {
+        let middleware = DelayMiddleware::fixed(0.25);
+        let spider = Arc::new(TestSpider);
+        let mut request = Request::<TestSpider>::new("https://example.com");
+
+        request = middleware.process_request(request, spider.clone()).await;
+        assert_eq!(request.request_delay_secs(), Some(0.25));
+        assert_eq!(
+            request.meta_bool(meta_keys::REQUEST_DELAY_SCHEDULED),
+            Some(true)
+        );
+
+        // Simulate engine consuming delay metadata before requeue.
+        assert_eq!(request.take_request_delay_secs(), Some(0.25));
+
+        let request = middleware.process_request(request, spider).await;
+        assert!(request.request_delay_secs().is_none());
+        assert!(
+            request
+                .meta_bool(meta_keys::REQUEST_DELAY_SCHEDULED)
+                .is_none()
+        );
     }
 }

@@ -95,6 +95,37 @@ impl UtilityFetchOptions {
     }
 }
 
+#[derive(Clone)]
+pub struct UtilityFetcher {
+    client: HttpClient,
+}
+
+impl UtilityFetcher {
+    pub fn new(options: UtilityFetchOptions) -> SilkwormResult<Self> {
+        let client = if is_default_utility_options(&options) {
+            shared_default_client()?
+        } else {
+            build_client(&options)?
+        };
+        Ok(UtilityFetcher { client })
+    }
+
+    pub async fn fetch_text(&self, url: &str) -> SilkwormResult<String> {
+        fetch_text_with_client(&self.client, url).await
+    }
+
+    pub async fn fetch_html(&self, url: &str) -> SilkwormResult<(String, scraper::Html)> {
+        let text = self.fetch_text(url).await?;
+        let document = scraper::Html::parse_document(&text);
+        Ok((text, document))
+    }
+
+    pub async fn fetch_document(&self, url: &str) -> SilkwormResult<scraper::Html> {
+        let text = self.fetch_text(url).await?;
+        Ok(scraper::Html::parse_document(&text))
+    }
+}
+
 fn is_default_utility_options(options: &UtilityFetchOptions) -> bool {
     options == &UtilityFetchOptions::default()
 }
@@ -132,6 +163,10 @@ async fn fetch_text_with_options(
     } else {
         build_client(options)?
     };
+    fetch_text_with_client(&client, url).await
+}
+
+async fn fetch_text_with_client(client: &HttpClient, url: &str) -> SilkwormResult<String> {
     let response = client.fetch(Request::<()>::get(url)).await?;
     Ok(response.text())
 }
@@ -163,7 +198,7 @@ pub async fn fetch_document_with(
 
 #[cfg(test)]
 mod tests {
-    use super::{UtilityFetchOptions, fetch_html, fetch_html_with};
+    use super::{UtilityFetchOptions, UtilityFetcher, fetch_html, fetch_html_with};
     use crate::errors::SilkwormError;
     use scraper::Selector;
     use std::io::ErrorKind;
@@ -178,6 +213,41 @@ mod tests {
         let body = body.to_string();
         let handle = tokio::spawn(async move {
             if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let mut request = Vec::new();
+                loop {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => read,
+                    };
+                    request.extend_from_slice(&buf[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        Ok((format!("http://{}", addr), handle))
+    }
+
+    async fn start_test_server_for_requests(
+        body: &str,
+        requests: usize,
+    ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let body = body.to_string();
+        let handle = tokio::spawn(async move {
+            for _ in 0..requests {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
                 let mut buf = [0u8; 1024];
                 let mut request = Vec::new();
                 loop {
@@ -231,6 +301,24 @@ mod tests {
         let (text, _) = fetch_html_with(&url, options).await.expect("fetch html");
 
         assert_eq!(text, "0123");
+        handle.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn utility_fetcher_reuses_custom_client() {
+        let (url, handle) = match start_test_server_for_requests("0123456789", 2).await {
+            Ok(value) => value,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to start local test server: {err}"),
+        };
+
+        let fetcher = UtilityFetcher::new(UtilityFetchOptions::new().with_html_max_size_bytes(4))
+            .expect("utility fetcher");
+        let first = fetcher.fetch_text(&url).await.expect("first fetch");
+        let second = fetcher.fetch_text(&url).await.expect("second fetch");
+
+        assert_eq!(first, "0123");
+        assert_eq!(second, "0123");
         handle.await.expect("server task");
     }
 

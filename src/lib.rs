@@ -15,7 +15,8 @@ pub mod spider;
 pub mod types;
 
 pub use api::{
-    UtilityFetchOptions, fetch_document, fetch_document_with, fetch_html, fetch_html_with,
+    UtilityFetchOptions, UtilityFetcher, fetch_document, fetch_document_with, fetch_html,
+    fetch_html_with,
 };
 pub use engine::Engine;
 pub use errors::{SilkwormError, SilkwormResult};
