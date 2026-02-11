@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use silkworm::{Headers, Request, Response};
-use sxd_xpath::Factory;
+use xee_xpath::Queries;
+use xee_xpath::context::StaticContextBuilder;
 
 const WARMUP_TIME: Duration = Duration::from_millis(200);
 const SAMPLE_TIME: Duration = Duration::from_millis(800);
@@ -299,10 +300,10 @@ fn main() {
             .unwrap_or_default()
     }));
 
-    let xpath = Factory::new()
-        .build("//li[@class='item']/a[@class='link']")
-        .expect("valid xpath")
-        .expect("non-empty xpath");
+    let queries = Queries::new(StaticContextBuilder::default());
+    let xpath = queries
+        .sequence("//li[@class='item']/a[@class='link']")
+        .expect("valid xpath");
     results.push(run_bench("html_xpath_precompiled", || {
         cached_html.xpath_with(&xpath).unwrap_or_default()
     }));

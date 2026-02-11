@@ -57,9 +57,7 @@ serde_json = "1.0"
 
 scraper = { git = "https://github.com/rust-scraper/scraper", rev = "f3132d9e06e652e2a4b3031bf7fc3ec3c6a817ce" }
 
-sxd-document = { version = "0.3", optional = true }
-sxd_html = { version = "0.1", optional = true }
-sxd-xpath = { version = "0.4", optional = true }
+xee-xpath = { version = "0.1.5", optional = true }
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 url = "2.5"
 thiserror = "2.0.18"
@@ -75,5 +73,5 @@ strip = "symbols"
 [features]
 default = ["scraper-atomic"]
 scraper-atomic = ["scraper/atomic"]
-xpath = ["dep:sxd-document", "dep:sxd_html", "dep:sxd-xpath"]
+xpath = ["dep:xee-xpath"]
 cli-examples = ["dep:clap"]

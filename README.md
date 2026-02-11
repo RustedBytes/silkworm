@@ -4,7 +4,7 @@
 [![Tests](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml/badge.svg)](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml)
 
 Async-first web scraping framework for Rust. Built on [`wreq`](https://crates.io/crates/wreq) + [`scraper`](https://crates.io/crates/scraper) with
-XPath support via [`sxd-xpath`](https://crates.io/crates/sxd-xpath). It keeps the API small
+XPath support via [`xee-xpath`](https://crates.io/crates/xee-xpath). It keeps the API small
 (Spider/Request/Response), adds middlewares and pipelines, and ships with
 structured logging so you can focus on crawling.
 

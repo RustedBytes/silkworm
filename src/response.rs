@@ -8,13 +8,13 @@ use std::sync::OnceLock;
 use bytes::Bytes;
 use encoding_rs::Encoding;
 use regex::Regex;
-#[cfg(feature = "xpath")]
-use sxd_document::dom::{Attribute, Element};
-#[cfg(feature = "xpath")]
-use sxd_xpath::nodeset::Node;
-#[cfg(feature = "xpath")]
-use sxd_xpath::{Context, Factory, Value};
 use url::Url;
+#[cfg(feature = "xpath")]
+use xee_xpath::context::StaticContextBuilder;
+#[cfg(feature = "xpath")]
+use xee_xpath::query::Query;
+#[cfg(feature = "xpath")]
+use xee_xpath::{Documents, Itemable, Queries};
 
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::request::{Callback, Request, SpiderOutput};
@@ -352,7 +352,7 @@ impl<S> HtmlResponse<S> {
         #[cfg(feature = "xpath")]
         {
             let xpath = compile_xpath(selector)?;
-            xpath_from_cached_source(self.html_source(), &xpath)
+            xpath_from_source(self.html_source(), &xpath)
         }
 
         #[cfg(not(feature = "xpath"))]
@@ -379,8 +379,11 @@ impl<S> HtmlResponse<S> {
     /// # Errors
     ///
     /// Returns an error when `XPath` evaluation fails.
-    pub fn xpath_with(&self, xpath: &sxd_xpath::XPath) -> SilkwormResult<Vec<HtmlElement>> {
-        xpath_from_cached_source(self.html_source(), xpath)
+    pub fn xpath_with(
+        &self,
+        xpath: &xee_xpath::query::SequenceQuery,
+    ) -> SilkwormResult<Vec<HtmlElement>> {
+        xpath_from_source(self.html_source(), xpath)
     }
 
     #[cfg(feature = "xpath")]
@@ -391,9 +394,9 @@ impl<S> HtmlResponse<S> {
     /// Returns an error when `XPath` evaluation fails.
     pub fn xpath_first_with(
         &self,
-        xpath: &sxd_xpath::XPath,
+        xpath: &xee_xpath::query::SequenceQuery,
     ) -> SilkwormResult<Option<HtmlElement>> {
-        Ok(xpath_from_cached_source(self.html_source(), xpath)?
+        Ok(xpath_from_source(self.html_source(), xpath)?
             .into_iter()
             .next())
     }
@@ -726,124 +729,78 @@ impl HtmlElement {
 }
 
 #[cfg(feature = "xpath")]
-fn compile_xpath(selector: &str) -> SilkwormResult<sxd_xpath::XPath> {
-    let factory = Factory::new();
-    let xpath = factory
-        .build(selector)
-        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
-    xpath.ok_or_else(|| {
-        SilkwormError::Selector("Invalid XPath selector: empty expression".to_string())
-    })
+fn compile_xpath(selector: &str) -> SilkwormResult<xee_xpath::query::SequenceQuery> {
+    let queries = Queries::new(StaticContextBuilder::default());
+    queries
+        .sequence(selector)
+        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))
 }
 
 #[cfg(feature = "xpath")]
-const XPATH_SOURCE_CACHE_CAPACITY: usize = 8;
-
-#[cfg(feature = "xpath")]
-thread_local! {
-    static XPATH_SOURCE_CACHE: std::cell::RefCell<
-        std::collections::VecDeque<(u64, String, sxd_document::Package)>
-    > = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
-}
-
-#[cfg(feature = "xpath")]
-fn xpath_from_cached_source(
+fn xpath_from_source(
     source: &str,
-    xpath: &sxd_xpath::XPath,
+    xpath: &xee_xpath::query::SequenceQuery,
 ) -> SilkwormResult<Vec<HtmlElement>> {
-    use std::hash::{Hash, Hasher};
+    let mut documents = Documents::new();
+    let doc = documents
+        .add_string_without_uri(source)
+        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath source: {err}")))?;
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    source.hash(&mut hasher);
-    let source_hash = hasher.finish();
+    let mut context_builder = xpath.dynamic_context_builder(&documents);
+    let context_item = doc
+        .to_item(&documents)
+        .map_err(|err| SilkwormError::Selector(format!("Invalid XPath source: {err}")))?;
+    context_builder.context_item(context_item);
+    let context = context_builder.build();
 
-    XPATH_SOURCE_CACHE.with(|cache_cell| {
-        let mut cache = cache_cell.borrow_mut();
-
-        if let Some(position) = cache
-            .iter()
-            .position(|(hash, cached_source, _)| *hash == source_hash && cached_source == source)
-        {
-            if position != 0
-                && let Some(entry) = cache.remove(position)
-            {
-                cache.push_front(entry);
-            }
-        } else {
-            cache.push_front((
-                source_hash,
-                source.to_string(),
-                sxd_html::parse_html(source),
-            ));
-            while cache.len() > XPATH_SOURCE_CACHE_CAPACITY {
-                cache.pop_back();
-            }
-        }
-
-        if let Some((_, _, package)) = cache.front() {
-            xpath_from_document(package.as_document(), xpath)
-        } else {
-            xpath_from_document(sxd_html::parse_html(source).as_document(), xpath)
-        }
-    })
-}
-
-#[cfg(feature = "xpath")]
-fn xpath_from_document(
-    document: sxd_document::dom::Document<'_>,
-    xpath: &sxd_xpath::XPath,
-) -> SilkwormResult<Vec<HtmlElement>> {
-    let context = Context::new();
-    let value = xpath
-        .evaluate(&context, document.root())
+    let sequence = xpath
+        .execute_with_context(&mut documents, &context)
         .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
-    Ok(xpath_value_to_elements(value))
+
+    xpath_sequence_to_elements(sequence, &documents, &context)
 }
 
 #[cfg(feature = "xpath")]
-fn xpath_value_to_elements(value: Value<'_>) -> Vec<HtmlElement> {
-    match value {
-        Value::Nodeset(nodeset) => nodeset
-            .document_order()
-            .into_iter()
-            .map(|node| HtmlElement::new(xpath_node_to_html(node), HashMap::new()))
-            .collect(),
-        Value::Boolean(value) => vec![HtmlElement::new(value.to_string(), HashMap::new())],
-        Value::Number(value) => vec![HtmlElement::new(value.to_string(), HashMap::new())],
-        Value::String(value) => vec![HtmlElement::new(value, HashMap::new())],
-    }
+fn xpath_sequence_to_elements(
+    sequence: xee_xpath::Sequence,
+    documents: &Documents,
+    context: &xee_xpath::context::DynamicContext,
+) -> SilkwormResult<Vec<HtmlElement>> {
+    sequence
+        .iter()
+        .map(|item| {
+            let html = xpath_item_to_html(&item, documents, context)?;
+            Ok(HtmlElement::new(html, HashMap::new()))
+        })
+        .collect()
 }
 
 #[cfg(feature = "xpath")]
-fn xpath_node_to_html(node: Node<'_>) -> String {
-    match node {
-        Node::Root(_) | Node::Element(_) => node_to_markup(node),
-        _ => node.string_value(),
-    }
-}
+fn xpath_item_to_html(
+    item: &xee_xpath::Item,
+    documents: &Documents,
+    context: &xee_xpath::context::DynamicContext,
+) -> SilkwormResult<String> {
+    let xot = documents.xot();
 
-#[cfg(feature = "xpath")]
-fn element_to_html(element: Element<'_>) -> String {
-    let mut out = String::new();
-    out.push('<');
-    push_element_name(&mut out, element);
-
-    for attribute in element.attributes() {
-        out.push(' ');
-        push_attribute_name(&mut out, attribute);
-        out.push_str("=\"");
-        out.push_str(&escape_attr(attribute.value()));
-        out.push('"');
+    match item {
+        xee_xpath::Item::Node(node)
+            if xot.is_document(*node)
+                || xot.is_element(*node)
+                || xot.is_comment(*node)
+                || xot.is_processing_instruction(*node) =>
+        {
+            xot.to_string(*node).map_err(|err| {
+                SilkwormError::Selector(format!("Invalid XPath selector result: {err}"))
+            })
+        }
+        xee_xpath::Item::Function(_) => item.display_representation(xot, context).map_err(|err| {
+            SilkwormError::Selector(format!("Invalid XPath selector result: {err}"))
+        }),
+        _ => item.string_value(xot).map_err(|err| {
+            SilkwormError::Selector(format!("Invalid XPath selector result: {err}"))
+        }),
     }
-
-    out.push('>');
-    for child in Node::Element(element).children() {
-        out.push_str(&node_to_markup(child));
-    }
-    out.push_str("</");
-    push_element_name(&mut out, element);
-    out.push('>');
-    out
 }
 
 fn element_attrs(element: &scraper::ElementRef<'_>) -> HashMap<String, String> {
@@ -860,73 +817,6 @@ fn select_all_selector() -> Option<&'static scraper::Selector> {
     SELECT_ALL
         .get_or_init(|| scraper::Selector::parse("*").ok())
         .as_ref()
-}
-
-#[cfg(feature = "xpath")]
-fn node_to_markup(node: Node<'_>) -> String {
-    match node {
-        Node::Root(root) => Node::Root(root)
-            .children()
-            .into_iter()
-            .map(node_to_markup)
-            .collect(),
-        Node::Element(element) => element_to_html(element),
-        Node::Attribute(attribute) => escape_attr(attribute.value()),
-        Node::Text(text) => escape_text(text.text()),
-        Node::Comment(comment) => format!("<!--{}-->", comment.text()),
-        Node::ProcessingInstruction(pi) => match pi.value() {
-            Some(value) if !value.is_empty() => format!("<?{} {}?>", pi.target(), value),
-            _ => format!("<?{}?>", pi.target()),
-        },
-        Node::Namespace(namespace) => namespace.uri().to_string(),
-    }
-}
-
-#[cfg(feature = "xpath")]
-fn push_element_name(out: &mut String, element: Element<'_>) {
-    if let Some(prefix) = element.preferred_prefix() {
-        out.push_str(prefix);
-        out.push(':');
-    }
-    out.push_str(element.name().local_part());
-}
-
-#[cfg(feature = "xpath")]
-fn push_attribute_name(out: &mut String, attribute: Attribute<'_>) {
-    if let Some(prefix) = attribute.preferred_prefix() {
-        out.push_str(prefix);
-        out.push(':');
-    }
-    out.push_str(attribute.name().local_part());
-}
-
-#[cfg(feature = "xpath")]
-fn escape_text(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-#[cfg(feature = "xpath")]
-fn escape_attr(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 fn decode_body(body: &[u8], headers: &Headers) -> (String, String) {
@@ -1283,6 +1173,42 @@ mod tests {
             let xpath = html.xpath_first("//a").expect("xpath").expect("node");
             assert!(xpath.html().contains("<a"));
         }
+    }
+
+    #[cfg(feature = "xpath")]
+    #[test]
+    fn xpath_sequence_query_supports_precompiled_queries_and_non_element_results() {
+        let body = b"<html><body><a href=\"/x\">Link</a></body></html>";
+        let response = Response {
+            url: "https://example.com".to_string(),
+            status: 200,
+            headers: Headers::new(),
+            body: Bytes::from_static(body),
+            request: Request::<()>::new("https://example.com"),
+        };
+        let html = response.into_html(1024);
+
+        let queries = xee_xpath::Queries::new(xee_xpath::context::StaticContextBuilder::default());
+        let anchor_query = queries.sequence("//a").expect("query");
+        let anchor = html
+            .xpath_first_with(&anchor_query)
+            .expect("xpath")
+            .expect("node");
+        assert!(anchor.html().contains("<a"));
+
+        let attr_query = queries.sequence("//a/@href").expect("query");
+        let href = html
+            .xpath_first_with(&attr_query)
+            .expect("xpath")
+            .expect("attr");
+        assert_eq!(href.html(), "/x");
+
+        let text_query = queries.sequence("//a/text()").expect("query");
+        let text = html
+            .xpath_first_with(&text_query)
+            .expect("xpath")
+            .expect("text");
+        assert_eq!(text.html(), "Link");
     }
 
     #[test]
