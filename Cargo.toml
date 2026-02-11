@@ -55,7 +55,7 @@ wreq = { version = "6.0.0-rc.27", default-features = false, features = ["json", 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-scraper = { git = "https://github.com/rust-scraper/scraper", rev = "f3132d9e06e652e2a4b3031bf7fc3ec3c6a817ce" }
+scraper = { version = "0.25.0", git = "https://github.com/rust-scraper/scraper", rev = "f3132d9e06e652e2a4b3031bf7fc3ec3c6a817ce" }
 
 xee-xpath = { version = "0.1.5", optional = true }
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
