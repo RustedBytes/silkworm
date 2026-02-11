@@ -757,12 +757,12 @@ fn xpath_from_source(
         .execute_with_context(&mut documents, &context)
         .map_err(|err| SilkwormError::Selector(format!("Invalid XPath selector: {err}")))?;
 
-    xpath_sequence_to_elements(sequence, &documents, &context)
+    xpath_sequence_to_elements(&sequence, &documents, &context)
 }
 
 #[cfg(feature = "xpath")]
 fn xpath_sequence_to_elements(
-    sequence: xee_xpath::Sequence,
+    sequence: &xee_xpath::Sequence,
     documents: &Documents,
     context: &xee_xpath::context::DynamicContext,
 ) -> SilkwormResult<Vec<HtmlElement>> {
