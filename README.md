@@ -372,6 +372,10 @@ HTML/XML fixtures instead of external websites.
 
 ## Benchmarks
 
+For statistical public-API benchmarks with Criterion, run
+`cargo bench -p silkworm-rs --bench criterion_api` (optionally add
+`--features xpath`). See [Criterion workloads and reproducible comparisons](docs/benchmarks-criterion.md).
+
 Run the built-in benchmark suite:
 
 ```bash
