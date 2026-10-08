@@ -67,6 +67,11 @@ default builds retain Rust 1.92 support. BOM, HTTP charset and HTML/XML declarat
 remain authoritative, and valid UTF-8 bypasses statistical detection. See
 [response decoding](docs/core-concepts.md#response-and-htmlresponse).
 
+The optional `tl-parser` feature adds `TlDocument`, `TlElement` and
+`HtmlResponse::tl_document()` using rustedbytes-tl 0.3.0. It offers explicit
+lightweight parsing; existing scraper APIs keep their behavior. See
+[TL integration and compatibility limits](docs/parser-evaluation.md).
+
 Tip: `use silkworm::prelude::*;` for the most common types.
 
 ## Quick Start

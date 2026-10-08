@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 scraper = { version = "=0.27.0", features = ["atomic"] }
-tl = { package = "rustedbytes-tl", version = "=0.2.0", features = ["std"] }
+tl = { package = "rustedbytes-tl", version = "=0.3.0", features = ["entities"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }

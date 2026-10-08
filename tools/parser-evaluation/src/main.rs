@@ -45,5 +45,8 @@ fn main() {
         .unwrap()
         .get(dom.parser())
         .unwrap();
-    println!("entity text\t{text:?}\t{:?}", node.inner_text(dom.parser()));
+    println!(
+        "entity text\t{text:?}\t{:?}",
+        node.decoded_inner_text(dom.parser())
+    );
 }

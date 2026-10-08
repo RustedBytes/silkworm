@@ -43,6 +43,12 @@ jobs:
       - name: Run features compatible with MSRV
         run: cargo test --features xpath,cli-examples
 
+      - name: Test explicit TL integration
+        run: |
+          cargo test --locked --features tl-parser
+          cargo test --locked --no-default-features --features tl-parser
+          cargo clippy --locked --all-targets --features tl-parser -- -D warnings
+
       - name: Run no-default-features tests
         run: cargo test --no-default-features
 

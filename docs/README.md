@@ -7,7 +7,7 @@ implementation in `src/` so the docs stay grounded in the code.
 ## Document Map
 
 - [Architecture and data flow](architecture.md)
-- [Parser replacement investigation (#17)](parser-evaluation.md)
+- [TL integration and parser evaluation (#17)](parser-evaluation.md)
 - [Core concepts (Spider, Request, Response)](core-concepts.md)
 - [Middlewares](middlewares.md)
 - [Pipelines](pipelines.md)

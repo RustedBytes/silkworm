@@ -12,7 +12,11 @@ pub mod request;
 pub mod response;
 pub mod runner;
 pub mod spider;
+#[cfg(feature = "tl-parser")]
+pub mod tl;
 pub mod types;
+#[cfg(feature = "tl-parser")]
+pub use tl::{TlDocument, TlElement};
 
 pub use api::{
     UtilityFetchOptions, UtilityFetcher, fetch_document, fetch_document_with, fetch_html,
