@@ -1,9 +1,11 @@
 mod pending;
+mod seen;
 
 use pending::PendingWorkGuard;
+use seen::SeenRequests;
 
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -131,41 +133,6 @@ pub struct EngineConfig<S: Spider> {
     pub html_max_size_bytes: usize,
     pub keep_alive: bool,
     pub fail_fast: bool,
-}
-
-struct SeenRequests {
-    entries: HashSet<Box<str>>,
-    order: VecDeque<Box<str>>,
-    max_entries: Option<usize>,
-}
-
-impl SeenRequests {
-    fn new(max_entries: Option<usize>) -> Self {
-        SeenRequests {
-            entries: HashSet::new(),
-            order: VecDeque::new(),
-            max_entries,
-        }
-    }
-
-    fn insert_if_new(&mut self, url: &str) -> bool {
-        if self.entries.contains(url) {
-            return false;
-        }
-
-        let boxed = url.to_string().into_boxed_str();
-        if let Some(max_entries) = self.max_entries {
-            while self.entries.len() >= max_entries {
-                let Some(oldest) = self.order.pop_front() else {
-                    break;
-                };
-                self.entries.remove(oldest.as_ref());
-            }
-            self.order.push_back(boxed.clone());
-        }
-        self.entries.insert(boxed);
-        true
-    }
 }
 
 struct QueuedRequest<S: Spider> {
@@ -572,7 +539,7 @@ impl<S: Spider> Engine<S> {
         } else {
             let fingerprint = request_fingerprint(&req);
             let mut seen = self.state.seen.lock().await;
-            if seen.entries.contains(fingerprint.as_str()) {
+            if seen.contains(fingerprint.as_str()) {
                 self.state
                     .logger
                     .debug("Skipping already seen request", &[("url", req.url.clone())]);
@@ -1352,7 +1319,6 @@ mod tests {
                 .seen
                 .lock()
                 .await
-                .entries
                 .contains("GET https://example.com/overflow")
         );
         engine.state.ready_queue.lock().await.clear();
