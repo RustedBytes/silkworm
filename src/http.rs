@@ -1,3 +1,7 @@
+mod query;
+
+pub(crate) use query::{build_url_with_params, canonical_url_with_params};
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -11,7 +15,7 @@ use crate::errors::{SilkwormError, SilkwormResult};
 use crate::logging::get_logger;
 use crate::request::Request;
 use crate::response::Response;
-use crate::types::{Headers, Params};
+use crate::types::Headers;
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -240,71 +244,6 @@ impl HttpClient {
         matches!(status, 301 | 302 | 303 | 307 | 308)
             && header_value_case_insensitive(headers, "location").is_some()
     }
-}
-
-pub(crate) fn build_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
-    if params.is_empty() {
-        let mut parsed = Url::parse(url)
-            .map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
-        parsed.set_fragment(None);
-        return Ok(parsed.to_string());
-    }
-    let mut parsed =
-        Url::parse(url).map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
-    parsed.set_fragment(None);
-
-    let merged = merged_query_pairs(&parsed, params);
-
-    parsed.query_pairs_mut().clear();
-    {
-        let mut pairs = parsed.query_pairs_mut();
-        for (key, value) in merged {
-            pairs.append_pair(&key, &value);
-        }
-    }
-
-    Ok(parsed.to_string())
-}
-
-pub(crate) fn canonical_url_with_params(url: &str, params: &Params) -> SilkwormResult<String> {
-    let mut parsed =
-        Url::parse(url).map_err(|err| SilkwormError::Http(format!("Invalid URL {url}: {err}")))?;
-    parsed.set_fragment(None);
-    let mut merged = merged_query_pairs(&parsed, params);
-    merged.sort();
-
-    parsed.query_pairs_mut().clear();
-    {
-        let mut pairs = parsed.query_pairs_mut();
-        for (key, value) in merged {
-            pairs.append_pair(&key, &value);
-        }
-    }
-
-    Ok(parsed.to_string())
-}
-
-fn merged_query_pairs(url: &Url, params: &Params) -> Vec<(String, String)> {
-    let mut merged: Vec<(String, String)> = url
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-
-    if params.is_empty() {
-        return merged;
-    }
-
-    merged.retain(|(key, _)| !params.contains_key(key));
-
-    // HashMap iteration order is nondeterministic; keep appended params stable.
-    let mut additions: Vec<(String, String)> = params
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    additions.sort();
-    merged.extend(additions);
-
-    merged
 }
 
 async fn read_response_body_limited(

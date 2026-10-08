@@ -122,3 +122,29 @@ Code:
 ```bash
 SILKWORM_LOG_LEVEL=DEBUG cargo run
 ```
+
+### URL parameter preparation and measurement
+
+URL preparation borrows keys and values from `Request.params` through a private
+`Cow<str>` merge helper instead of cloning each payload. Existing URL query
+pairs remain owned so the parsed URL can be mutated safely. Params still replace
+all existing values of matching keys, appended params are sorted, canonical
+URLs sort all pairs, and fragments are removed. The returned URL is still an
+owned `String`; parsing, percent-encoding and output storage allocate as needed.
+
+Run `cargo bench --bench url_params` for URL construction and canonicalization
+with 0, 1, 8 and 64 params, Unicode values, duplicate query keys, empty fields
+and invalid URL input. Each case measures 20,000 synchronous operations, two
+warmups and nine samples. Fixtures are excluded; parsing, merging, serialization,
+error construction where applicable and result destruction are included. This
+measures URL preparation rather than HTTP or whole-crawl throughput.
+
+For allocation counts, run
+`python scripts/measure_seen_allocations.py --benchmark url_params --toolchain 1.92.0`.
+The temporary harness imports the production helper and error types, copies the
+project lockfile to preserve dependency resolution, and adds `stats_alloc`
+0.1.10 only in that temporary package. Timing runs use no counting allocator.
+Counts cover Rust System allocator calls/reallocations, deallocations and
+requested bytes inside the workload, excluding fixture setup and reporting.
+Peak RSS, allocator usable size, networking and foreign allocations are not
+measured. The existing seen-cache allocation command remains the default.

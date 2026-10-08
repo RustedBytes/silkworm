@@ -181,3 +181,32 @@ time includes task startup, accounting, notification waiting and joins, but
 excludes constructing the admitted guards. This is a scheduler microbenchmark,
 not a crawl throughput or bounded item-channel benchmark; it does not establish
 performance for HTML parsing, slow pipelines, HTTP, or external overload.
+
+### Deduplication storage
+
+With `max_seen_requests` configured, membership and FIFO eviction share each
+fingerprint through `Arc<str>`. A duplicate does not refresh its FIFO position.
+Unbounded storage keeps singly owned `Box<str>` keys. Borrowed string lookup and
+Rust's default randomized hashing are retained; fingerprints and equality are
+unchanged. Sharing removes the second payload allocation and copy, but adds
+reference-count operations and an allocation header, so cold insertion latency
+and very short-key memory usage can differ.
+
+`cargo bench --bench seen_requests` measures the production cache with 20,000
+operations and 32-, 128- and 1024-byte fingerprints. Cases cover cold bounded
+and unbounded filling, steady FIFO eviction at capacity 4096, and duplicate
+hits. Fixtures and steady-cache initialization are excluded; cold filling
+includes construction, growth and destruction. Each case has two warmups and
+nine timed samples. The synchronous microbenchmark excludes URL fingerprint
+construction, engine locks, HTTP and whole-crawl throughput.
+
+For separate allocation measurements, run
+`python scripts/measure_seen_allocations.py --toolchain 1.92.0`. It builds an
+isolated temporary harness using `stats_alloc` 0.1.10 and the same workloads;
+the project's dependency manifest and lockfile stay unchanged. Counts include
+Rust System allocator requests, reallocations, deallocations and requested
+bytes inside the workload boundary, not allocator usable size or peak RSS.
+Fixture allocation, output formatting and steady-cache setup/teardown are
+excluded; cold-cache destruction is included. Allocation instrumentation is
+not used for latency samples. Duplicate-hit counts describe only cache lookup,
+not fingerprint generation or the rest of a crawl.

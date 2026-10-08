@@ -25,6 +25,14 @@ required-features = ["xpath"]
 name = "item_accounting"
 harness = false
 
+[[bench]]
+name = "seen_requests"
+harness = false
+
+[[bench]]
+name = "url_params"
+harness = false
+
 [[example]]
 name = "quotes_spider_xpath"
 required-features = ["xpath"]
