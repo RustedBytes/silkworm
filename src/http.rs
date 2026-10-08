@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
+use http_body_util::BodyExt;
 use tokio::sync::Semaphore;
 use url::Url;
 use wreq::redirect::Policy;
@@ -312,23 +313,14 @@ async fn read_response_body_limited(
     url: &str,
 ) -> SilkwormResult<(Bytes, bool)> {
     if max_bytes == 0 {
-        while response
-            .chunk()
-            .await
-            .map_err(|err| {
-                SilkwormError::Http(format!("Failed to read response body from {url}: {err}"))
-            })?
-            .is_some()
-        {}
+        while read_response_chunk(response, url).await?.is_some() {}
         return Ok((Bytes::new(), true));
     }
 
     let mut body = BytesMut::with_capacity(max_bytes.min(8192));
     let mut truncated = false;
     loop {
-        let chunk = response.chunk().await.map_err(|err| {
-            SilkwormError::Http(format!("Failed to read response body from {url}: {err}"))
-        })?;
+        let chunk = read_response_chunk(response, url).await?;
         let Some(chunk) = chunk else { break };
 
         if body.len() >= max_bytes {
@@ -346,6 +338,23 @@ async fn read_response_body_limited(
     }
 
     Ok((body.freeze(), truncated))
+}
+
+// wreq 6 rc.31 exposes the response as an HTTP body instead of `chunk()`.
+// Skip trailer frames while preserving streaming, errors and complete draining.
+async fn read_response_chunk(
+    response: &mut wreq::Response,
+    url: &str,
+) -> SilkwormResult<Option<Bytes>> {
+    while let Some(frame) = response.frame().await {
+        let frame = frame.map_err(|err| {
+            SilkwormError::Http(format!("Failed to read response body from {url}: {err}"))
+        })?;
+        if let Ok(chunk) = frame.into_data() {
+            return Ok(Some(chunk));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_redirect_url(current_url: &str, location: &str) -> String {
@@ -418,9 +427,19 @@ mod tests {
     async fn start_test_server(
         body: &str,
     ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
+        start_test_server_response(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+            body.len(),
+            body
+        ))
+        .await
+    }
+
+    async fn start_test_server_response(
+        response: String,
+    ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
-        let body = body.to_string();
         let handle = tokio::spawn(async move {
             if let Ok((mut socket, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
@@ -435,11 +454,6 @@ mod tests {
                         break;
                     }
                 }
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
                 let _ = socket.write_all(response.as_bytes()).await;
             }
         });
@@ -591,6 +605,64 @@ mod tests {
             "https://example.com/next".to_string(),
         );
         assert!(client.should_follow_redirect(302, &headers));
+    }
+
+    #[tokio::test]
+    async fn read_limited_body_handles_chunked_data_and_trailers() {
+        for (limit, expected, truncated) in [
+            (0, "", true),
+            (4, "abcd", true),
+            (6, "abcdef", false),
+            (8, "abcdef", false),
+        ] {
+            let (url, handle) = start_test_server_response(
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Test\r\n\r\n\
+                 3\r\nabc\r\n3\r\ndef\r\n0\r\nX-Test: done\r\n\r\n"
+                    .to_string(),
+            )
+            .await
+            .expect("local server");
+            let mut response = wreq::Client::new()
+                .get(&url)
+                .send()
+                .await
+                .expect("response");
+            let (body, was_truncated) =
+                super::read_response_body_limited(&mut response, limit, &url)
+                    .await
+                    .expect("body");
+            assert_eq!(body.as_ref(), expected.as_bytes());
+            assert_eq!(was_truncated, truncated);
+            assert!(
+                super::read_response_chunk(&mut response, &url)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            handle.await.expect("server task");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_limited_body_reports_errors_even_after_limit_is_reached() {
+        for limit in [0, 2, 8] {
+            let (url, handle) = start_test_server_response(
+                "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc".to_string(),
+            )
+            .await
+            .expect("local server");
+            let mut response = wreq::Client::new()
+                .get(&url)
+                .send()
+                .await
+                .expect("response");
+            let err = super::read_response_body_limited(&mut response, limit, &url)
+                .await
+                .expect_err("incomplete body must fail");
+            assert!(matches!(err, crate::errors::SilkwormError::Http(_)));
+            assert!(err.to_string().contains(&url));
+            handle.await.expect("server task");
+        }
     }
 
     #[tokio::test]

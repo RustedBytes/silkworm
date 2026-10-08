@@ -148,6 +148,13 @@ pub struct RetryMiddleware {
     logger: crate::logging::Logger,
 }
 
+/// A retry decision, independent of request mutation and logging.
+#[derive(Debug, PartialEq)]
+struct RetryPlan {
+    attempt: u64,
+    delay_secs: f64,
+}
+
 impl RetryMiddleware {
     #[must_use]
     pub fn new(
@@ -159,7 +166,7 @@ impl RetryMiddleware {
         let retry_http_codes =
             retry_http_codes.unwrap_or_else(|| vec![500, 502, 503, 504, 522, 524, 408, 429]);
         let sleep_http_codes = sleep_http_codes.unwrap_or_else(|| retry_http_codes.clone());
-        let mut merged = retry_http_codes.clone();
+        let mut merged = retry_http_codes;
         for code in &sleep_http_codes {
             if !merged.contains(code) {
                 merged.push(*code);
@@ -173,6 +180,25 @@ impl RetryMiddleware {
             logger: get_logger("RetryMiddleware", None),
         }
     }
+
+    fn retry_plan(&self, status: u16, retry_times: u64) -> Option<RetryPlan> {
+        if !self.retry_http_codes.contains(&status) || retry_times >= self.max_times {
+            return None;
+        }
+
+        let delay_secs = if self.sleep_http_codes.contains(&status) && self.backoff_base > 0.0 {
+            let exponent = i32::try_from(retry_times).unwrap_or(i32::MAX);
+            self.backoff_base * 2f64.powi(exponent)
+        } else {
+            0.0
+        };
+
+        Some(RetryPlan {
+            // retry_times < max_times guarantees this cannot overflow.
+            attempt: retry_times + 1,
+            delay_secs,
+        })
+    }
 }
 
 impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
@@ -183,32 +209,21 @@ impl<S: Spider> ResponseMiddleware<S> for RetryMiddleware {
     ) -> MiddlewareFuture<'_, ResponseAction<S>> {
         Box::pin(async move {
             let status = response.status;
-            if !self.retry_http_codes.contains(&status) {
+            let Some(plan) = self.retry_plan(status, response.request.retry_times()) else {
                 return ResponseAction::Response(response);
-            }
-
-            let retry_times = response.request.retry_times();
-
-            if retry_times >= self.max_times {
-                return ResponseAction::Response(response);
-            }
-
-            let mut req = response.request.clone();
-            req.dont_filter = true;
-            req.set_retry_times(retry_times + 1);
-
-            let delay = if self.sleep_http_codes.contains(&status) && self.backoff_base > 0.0 {
-                let exponent = i32::try_from(retry_times).unwrap_or(i32::MAX);
-                self.backoff_base * 2f64.powi(exponent)
-            } else {
-                0.0
             };
+
+            let mut req = response.request;
+            req.dont_filter = true;
+            req.set_retry_times(plan.attempt);
+
+            let delay = plan.delay_secs;
             self.logger.warn(
                 "Retrying request",
                 &[
                     ("url", req.url.clone()),
                     ("delay", format!("{delay:.2}")),
-                    ("attempt", (retry_times + 1).to_string()),
+                    ("attempt", plan.attempt.to_string()),
                     ("status", status.to_string()),
                 ],
             );
@@ -446,6 +461,133 @@ mod tests {
             headers: Headers::new(),
             body: Bytes::new(),
             request,
+        }
+    }
+
+    #[test]
+    fn retry_policy_respects_status_limit_and_backoff() {
+        let middleware = RetryMiddleware::new(3, Some(vec![500]), Some(vec![429]), 0.5);
+        for (status, retries, expected) in [
+            (200, 0, None),
+            (500, 0, Some((1, 0.0))),
+            (500, 2, Some((3, 0.0))),
+            (429, 0, Some((1, 0.5))),
+            (429, 2, Some((3, 2.0))),
+            (429, 3, None),
+            (500, u64::MAX, None),
+        ] {
+            assert_eq!(
+                middleware
+                    .retry_plan(status, retries)
+                    .map(|plan| (plan.attempt, plan.delay_secs)),
+                expected,
+                "status={status}, retries={retries}"
+            );
+        }
+        assert!(
+            RetryMiddleware::new(0, None, None, 1.0)
+                .retry_plan(500, 0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn retry_policy_preserves_extreme_backoff_and_counter_behavior() {
+        for base in [0.0, -1.0, f64::NAN, f64::NEG_INFINITY] {
+            let plan = RetryMiddleware::new(u64::MAX, None, None, base)
+                .retry_plan(500, u64::MAX - 1)
+                .unwrap();
+            assert_eq!(plan.attempt, u64::MAX);
+            assert_eq!(plan.delay_secs, 0.0);
+        }
+        for (base, retries) in [(f64::INFINITY, 0), (1.0, u64::MAX - 1)] {
+            let middleware = RetryMiddleware::new(u64::MAX, None, None, base);
+            assert_eq!(
+                middleware.retry_plan(500, retries).unwrap().delay_secs,
+                f64::INFINITY
+            );
+            assert!(middleware.retry_plan(500, u64::MAX).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_owned_request_fields_and_existing_delay() {
+        let middleware = RetryMiddleware::new(3, Some(vec![500]), Some(vec![]), 1.0);
+        let callback = super::noop_callback::<TestSpider>();
+        let mut request = Request::new("https://example.com/retry");
+        request.method = "POST".to_string();
+        request.priority = 42;
+        request.timeout = Some(std::time::Duration::from_secs(7));
+        request
+            .headers
+            .insert("X-Test".to_string(), "value".to_string());
+        request.params.insert("page".to_string(), "2".to_string());
+        request.data = Some(Bytes::from_static(b"payload"));
+        request.json = Some(serde_json::json!({"payload": [1, 2, 3]}));
+        request
+            .meta
+            .insert("custom".to_string(), serde_json::json!({"keep": true}));
+        request.callback = Some(callback.clone());
+        request.set_retry_times(1);
+        request.set_retry_delay_secs(4.0);
+        let url_ptr = request.url.as_ptr();
+        let expected = request.clone();
+
+        let action = middleware
+            .process_response(base_response(request, 500), Arc::new(TestSpider))
+            .await;
+        let ResponseAction::Request(request) = action else {
+            panic!("expected retry request");
+        };
+        assert_eq!(
+            request.url.as_ptr(),
+            url_ptr,
+            "retry must reuse the owned URL"
+        );
+        assert_eq!(request.url, expected.url);
+        assert_eq!(request.method, expected.method);
+        assert_eq!(request.headers, expected.headers);
+        assert_eq!(request.params, expected.params);
+        assert_eq!(request.data, expected.data);
+        assert_eq!(request.json, expected.json);
+        assert_eq!(request.meta.get("custom"), expected.meta.get("custom"));
+        assert_eq!(request.priority, expected.priority);
+        assert_eq!(request.timeout, expected.timeout);
+        assert!(Arc::ptr_eq(request.callback.as_ref().unwrap(), &callback));
+        assert!(request.dont_filter);
+        assert_eq!(request.retry_times(), 2);
+        // A zero delay must not erase metadata already present on the request.
+        assert_eq!(request.retry_delay_secs(), Some(4.0));
+    }
+
+    #[tokio::test]
+    async fn retry_passes_through_complete_response_when_not_retrying() {
+        let middleware = RetryMiddleware::new(1, None, None, 0.5);
+        for (status, retries) in [(200, 0), (500, 1)] {
+            let mut request = Request::new("https://example.com");
+            request.set_retry_times(retries);
+            let mut response = base_response(request, status);
+            response.body = Bytes::from_static(b"original body");
+            response
+                .headers
+                .insert("X-Test".to_string(), "value".to_string());
+            let url_ptr = response.url.as_ptr();
+            let action = middleware
+                .process_response(response, Arc::new(TestSpider))
+                .await;
+            let ResponseAction::Response(response) = action else {
+                panic!("expected original response");
+            };
+            assert_eq!(response.url.as_ptr(), url_ptr);
+            assert_eq!(response.status, status);
+            assert_eq!(response.body.as_ref(), b"original body");
+            assert_eq!(
+                response.headers.get("X-Test").map(String::as_str),
+                Some("value")
+            );
+            assert_eq!(response.request.retry_times(), retries);
+            assert!(!response.request.dont_filter);
+            assert!(response.request.retry_delay_secs().is_none());
         }
     }
 
