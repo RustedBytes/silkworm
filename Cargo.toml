@@ -46,22 +46,23 @@ name = "sitemap_spider"
 required-features = ["cli-examples"]
 
 [dependencies]
-bytes = "1.11"
-clap = { version = "4.5", features = ["derive"], optional = true }
-encoding_rs = "0.8"
-rand = "0.10.0"
-regex = "1.12"
-wreq = { version = "6.0.0-rc.27", default-features = false, features = ["json", "gzip", "brotli", "deflate", "webpki-roots"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"], optional = true }
+encoding_rs = "0.8.42"
+http-body-util = "0.1.5"
+rand = "0.10.3"
+regex = "1.13.1"
+wreq = { version = "6.0.0-rc.31", default-features = false, features = ["tokio-rt", "json", "gzip", "brotli", "deflate", "webpki-roots"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
-scraper = { version = "0.25.0", git = "https://github.com/rust-scraper/scraper", rev = "f3132d9e06e652e2a4b3031bf7fc3ec3c6a817ce" }
+scraper = "0.27.0"
 
 xee-xpath = { version = "0.1.5", optional = true }
-tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
-url = "2.5"
-thiserror = "2.0.18"
-fasttime = "0.2"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+url = "2.5.8"
+thiserror = "2.0.21"
+fasttime = "0.3.0"
 
 [profile.release]
 opt-level = 3
