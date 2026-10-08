@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Count allocations in the production seen-cache workloads without repo dependencies."""
+"""Count Rust allocations in selected production workloads using a temporary harness."""
 
 import argparse
+import json
+import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -10,8 +13,12 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", default="1.92.0")
+    parser.add_argument(
+        "--benchmark", choices=["seen_requests", "url_params"], default="seen_requests"
+    )
     args = parser.parse_args()
-    workload = (Path(__file__).resolve().parents[1] / "benches/seen_requests.rs").as_posix()
+    repository = Path(__file__).resolve().parents[1]
+    workload = (repository / "benches" / f"{args.benchmark}.rs").as_posix()
     # A raw Rust string preserves paths with spaces, quotes, Unicode or backslashes.
     delimiter = "#"
     while '"' + delimiter in workload:
@@ -20,14 +27,29 @@ def main():
     with tempfile.TemporaryDirectory(prefix="silkworm-seen-alloc-") as directory:
         root = Path(directory)
         (root / "src").mkdir()
+        project_dependency = ""
+        project_imports = ""
+        if args.benchmark == "url_params":
+            repository_path = json.dumps(repository.as_posix(), ensure_ascii=False)
+            project_dependency = f"silkworm-rs = {{ path = {repository_path} }}\n"
+            lock = (repository / "Cargo.lock").read_text()
+            match = re.search(
+                r'\[\[package\]\]\nname = "url"\nversion = "([^"\n]+)"', lock
+            )
+            if match is None:
+                raise RuntimeError("Locked url dependency not found")
+            url_version = match.group(1)
+            project_dependency += f'url = "={url_version}"\n'
+            project_imports = "pub use silkworm::{errors, types};\n"
+            shutil.copyfile(repository / "Cargo.lock", root / "Cargo.lock")
         (root / "Cargo.toml").write_text(
             '[package]\nname = "silkworm-seen-alloc"\nversion = "0.0.0"\n'
             'edition = "2024"\n[dependencies]\nstats_alloc = "=0.1.10"\n'
-            '[profile.release]\nlto = "fat"\ncodegen-units = 1\n',
+            + project_dependency + '[profile.release]\nlto = "fat"\ncodegen-units = 1\n',
             encoding="utf-8",
         )
         (root / "src/main.rs").write_text(
-            '#[allow(dead_code)]\n'
+            project_imports + '#[allow(dead_code)]\n'
             f'#[path = {rust_path}]\nmod workload;\n'
             'use std::alloc::System;\n'
             'use stats_alloc::{StatsAlloc, Region, INSTRUMENTED_SYSTEM};\n'
