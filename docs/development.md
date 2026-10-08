@@ -2,7 +2,8 @@
 
 ## Build the current checkout
 
-The repository uses Rust edition 2024 with MSRV 1.92. These instructions target
+The repository uses Rust edition 2024 with MSRV 1.92 for default builds. The optional
+`charset-detection` feature requires Rust 1.98. These instructions target
 Linux; other platforms have not been verified by this guide. Build dependencies
 for the native TLS stack are a C/C++ compiler, CMake and libclang with headers
 available to bindgen. On Ubuntu, install them with:
@@ -31,15 +32,16 @@ Cargo's target directory.
 Python 3 is needed for the Markdown example checker:
 
 ```bash
-RUSTDOCFLAGS="-D warnings" cargo +1.92.0 doc --locked --no-deps --all-features
-cargo +1.92.0 test --locked --doc --all-features
+RUSTDOCFLAGS="-D warnings" cargo +1.92.0 doc --locked --no-deps --features xpath,cli-examples
+cargo +1.92.0 test --locked --doc --features xpath,cli-examples
 RUSTUP_TOOLCHAIN=1.92.0 python3 scripts/check_docs.py
 ```
 
 The checker checks local links, heading anchors and code fences, then extracts every `rust` block from the README and guides, supplies
 the fragment context described in the [index](README.md#example-conventions),
-and compiles against the current public exports with default, all and no
-optional features. Complete programs compile in their own modules; statement
+and compiles against the current public exports with default, MSRV-compatible optional features and no default
+features. On Rust 1.98 or newer, pass `--all-features` to the checker to include
+charset detection. Complete programs compile in their own modules; statement
 fragments receive an async function, a small spider and an HTML response.
 Architecture blocks labelled `text` are illustrative pseudocode, not examples.
 
@@ -67,10 +69,14 @@ For code changes, the [CI workflow](../.github/workflows/test.yml) runs:
 cargo +1.92.0 fmt --all -- --check
 cargo +1.92.0 check --all-targets
 cargo +1.92.0 test --all
-cargo +1.92.0 test --all-features
+cargo +1.92.0 test --features xpath,cli-examples
 cargo +1.92.0 test --no-default-features
-cargo +1.92.0 clippy --all-targets --all-features -- -D warnings
+cargo +1.92.0 clippy --all-targets --features xpath,cli-examples -- -D warnings
 ```
+
+CI separately runs `cargo test --locked --all-features` and
+`cargo test --locked --no-default-features --features charset-detection` on Rust 1.98,
+and lints all features with that toolchain.
 
 The core benchmark threshold job is scheduled and optionally manually
 requested; it is separate from normal pull-request tests. Microbenchmarks and

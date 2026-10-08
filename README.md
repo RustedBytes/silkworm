@@ -60,6 +60,13 @@ features, CSS remains available but documents are parsed per selection.
 `cli-examples` enables clap-based repository examples; it is not required by
 application spiders.
 
+Enable automatic detection of undeclared non-UTF-8 text with
+`cargo add silkworm-rs --features charset-detection`. This optional feature uses
+[`charset-norm`](https://docs.rs/charset-norm/) and requires **Rust 1.98 or newer**;
+default builds retain Rust 1.92 support. BOM, HTTP charset and HTML/XML declarations
+remain authoritative, and valid UTF-8 bypasses statistical detection. See
+[response decoding](docs/core-concepts.md#response-and-htmlresponse).
+
 Tip: `use silkworm::prelude::*;` for the most common types.
 
 ## Quick Start

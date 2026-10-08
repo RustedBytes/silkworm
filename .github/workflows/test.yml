@@ -40,8 +40,8 @@ jobs:
       - name: Run baseline tests
         run: cargo test --all
 
-      - name: Run all-features tests
-        run: cargo test --all-features
+      - name: Run features compatible with MSRV
+        run: cargo test --features xpath,cli-examples
 
       - name: Run no-default-features tests
         run: cargo test --no-default-features
@@ -53,12 +53,28 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: |
-          cargo doc --locked --no-deps --all-features
-          cargo test --locked --doc --all-features
+          cargo doc --locked --no-deps --features xpath,cli-examples
+          cargo test --locked --doc --features xpath,cli-examples
           python3 scripts/check_docs.py
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --features xpath,cli-examples -- -D warnings
+
+  charset-detection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.98"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test charset detection with all features
+        run: cargo test --locked --all-features
+      - name: Test detection without DOM caching
+        run: cargo test --locked --no-default-features --features charset-detection
+      - name: Lint all features
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   benchmark:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_benchmarks == 'true')
