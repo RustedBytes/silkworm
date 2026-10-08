@@ -15,14 +15,15 @@ request de-duplication.
 5. Response middlewares can transform the response or return a new request.
 6. The response is parsed via a callback or the spider's `parse` method.
 7. Outputs are turned into new requests or items, then re-queued or piped.
-8. When the queue drains and no requests are pending, the engine shuts down
+8. When the request queues drain and no requests or items are pending, the
+   engine shuts down
    (or earlier when `fail_fast` is enabled and an error occurs).
 
 Implementation entry points:
 - Engine and core loop: `../src/engine.rs`
 - Run helpers: `../src/runner.rs`
 
-```rust
+```text
 // Engine startup (simplified)
 self.open_spider().await?;
 self.await_idle_or_worker_health(...).await?;
@@ -44,7 +45,7 @@ Relevant code:
 - Spider hooks: `../src/spider.rs`
 - Item pipelines: `../src/pipelines.rs`
 
-```rust
+```text
 // open_spider (excerpt)
 self.state.spider.open().await;
 for pipe in &self.state.item_pipelines {
@@ -83,15 +84,10 @@ HTTP method + canonical URL (including merged query params). If a request is
 not marked as `dont_filter`, the engine skips duplicates. You can optionally
 cap the set with `max_seen_requests` to bound memory.
 
-```rust
-// enqueue (excerpt)
-if !req.dont_filter {
-    let mut seen = self.state.seen.lock().await;
-    if !seen.insert_if_new(&request_fingerprint(&req)) {
-        return Ok(());
-    }
-}
-```
+The duplicate lookup happens before reserving a backlog slot. New fingerprints
+are inserted only after admission succeeds; rejected requests do not enter the
+history. FIFO eviction can make an old request eligible again. Body, headers,
+metadata and callbacks are not part of the fingerprint.
 
 Relevant code:
 - De-duplication and enqueue: `../src/engine.rs`
@@ -107,7 +103,7 @@ is not already present.
 Delay middleware now schedules delayed requeue via request metadata, so workers
 are not blocked by `sleep`.
 
-```rust
+```text
 for mw in &self.state.request_middlewares {
     req = mw.process_request(req, self.state.spider.clone()).await;
 }
@@ -132,7 +128,7 @@ Responses pass through response middlewares. A middleware can:
 If no callback is defined, the engine wraps the response in `HtmlResponse` and
 calls `Spider::parse`.
 
-```rust
+```text
 match processed {
     ResponseAction::Request(req) => self.enqueue(req).await?,
     ResponseAction::Response(resp) => {

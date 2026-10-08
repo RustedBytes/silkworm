@@ -21,6 +21,8 @@ Code:
 - Spider trait: `../src/spider.rs`
 
 ```rust
+use silkworm::{HtmlResponse, Spider, SpiderResult};
+
 struct QuotesSpider;
 
 impl Spider for QuotesSpider {
@@ -30,7 +32,7 @@ impl Spider for QuotesSpider {
         vec!["https://quotes.toscrape.com/"]
     }
 
-    async fn parse(&self, response: HtmlResponse<Self>) -> SpiderResult<Self> {
+    async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
         Ok(Vec::new())
     }
 }
@@ -62,7 +64,9 @@ Code:
 - Request type and builder: `../src/request.rs`
 
 ```rust
-let request = Request::get("https://example.com/search")
+use silkworm::Request;
+
+let request = Request::<QuotesSpider>::get("https://example.com/search")
     .with_params([("q", "rust"), ("page", "1")])
     .with_header("Accept", "text/html")
     .with_allow_non_html(false);
@@ -78,7 +82,8 @@ let request = Request::get("https://example.com/search")
 - `follow` helpers for building new requests
 - `looks_like_html` heuristics
 
-`HtmlResponse` is a wrapper around `Response` that adds CSS and XPath helpers.
+`HtmlResponse` is a wrapper around `Response` that adds CSS helpers and optional
+XPath evaluation.
 It caches decoded HTML and (optionally) parsed document state when the
 `scraper-atomic` feature is enabled.
 
@@ -127,6 +132,12 @@ let first = response.select_first_or_none(".quote");
 let links = response.select_attrs("a.next", "href");
 ```
 
+CSS extraction helpers do not evaluate XPath. `xpath`/`xpath_first` return a
+`Selector` error without the `xpath` feature or for invalid expressions;
+convenience variants suppress errors into empty results. `HtmlElement` has CSS
+selection only. Prefer error-returning APIs when an invalid selector should
+stop parsing. A valid selector with no matches is not an error.
+
 ## Output Model
 
 Spider callbacks return a `SpiderResult`, which is:
@@ -146,7 +157,7 @@ Code:
 use serde_json::json;
 
 let mut out = Vec::new();
-out.push(Request::get("https://example.com/page/2").into());
+out.push(Request::<QuotesSpider>::get("https://example.com/page/2").into());
 out.push(json!({ "title": "Hello" }).into());
 Ok(out)
 ```

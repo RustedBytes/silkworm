@@ -2,6 +2,10 @@
 
 Pipelines consume scraped items and write them to files or custom handlers. Each
 pipeline follows an async lifecycle: `open`, `process_item`, and `close`.
+The engine passes each item through pipelines sequentially in registration
+order; the returned item is input to the next pipeline. A pipeline error stops
+processing that item. With `fail_fast` disabled it is logged and crawling
+continues; enabling `fail_fast` stops the crawl.
 
 ## File Writer Ownership and Cancellation
 
@@ -34,7 +38,10 @@ Code:
 - Engine integration: `../src/engine.rs`
 
 ```rust
-use silkworm::pipelines::PipelineFuture;
+use std::sync::Arc;
+use silkworm::{Item, ItemPipeline, PipelineFuture, SilkwormResult, Spider};
+
+struct CustomPipeline;
 
 impl<S: Spider> ItemPipeline<S> for CustomPipeline {
     fn open<'a>(&'a self, _spider: Arc<S>) -> PipelineFuture<'a, SilkwormResult<()>> {
@@ -75,7 +82,8 @@ Code:
 ### CsvPipeline
 
 Flattens nested items into a flat row format and writes CSV output. Field
-names can be provided or inferred from the first item.
+names can be provided or inferred from the first item. Opening CSV truncates
+an existing target file; later items do not expand the inferred field list.
 
 Flattening rules:
 - Object keys are flattened with underscore separators.
@@ -89,7 +97,7 @@ Code:
 
 Writes items as nested XML. The pipeline writes a document header on open and
 closes the root element on close. Tag names are sanitized (spaces and dashes
-become underscores).
+become underscores). Opening XML truncates an existing target file.
 
 Code:
 - `XmlPipeline`: `../src/pipelines.rs`
@@ -97,7 +105,7 @@ Code:
 ```rust
 use silkworm::{CallbackPipeline, JsonLinesPipeline, RunConfig};
 
-let config = RunConfig::new()
+let config = RunConfig::<QuotesSpider>::new()
     .with_item_pipeline(JsonLinesPipeline::new("data/items.jl"))
     .with_item_pipeline(CallbackPipeline::from_sync(|item, _spider| Ok(item)));
 ```

@@ -13,7 +13,20 @@ implementation in `src/` so the docs stay grounded in the code.
 - [Configuration and runtime](configuration.md)
 - [HTTP client, utility API, and logging](http-and-logging.md)
 - [Errors and shared types](errors-and-types.md)
-- [Implementation roadmap](implementation-roadmap.md)
+- [Development and documentation verification](development.md)
+
+## Example conventions
+
+The README contains the complete `QuotesSpider` application. Guide snippets
+are fragments: use that definition, add `use silkworm::*;` (the common snippet context)
+and any explicit imports shown, and put statements
+inside a function returning `SilkwormResult<()>`. Async fragments require a
+Tokio runtime; selector snippets assume an `HtmlResponse<QuotesSpider>` named
+`response`. Finish statement fragments with `Ok(())`. The output-model fragment
+instead belongs in `Spider::parse` and returns `SpiderResult<Self>`.
+
+API signatures and feature availability come from the current checkout, not
+from a planned release. See the development guide for checks against this code.
 
 ## Module Map
 

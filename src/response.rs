@@ -143,7 +143,7 @@ impl<S> Response<S> {
 
     /// Follow multiple URLs, filtering out empty strings.
     /// This is a convenience method for cases where you have an iterator of strings
-    /// rather than Option<String>.
+    /// rather than `Option<String>`.
     pub fn follow_many<I, H>(&self, hrefs: I, callback: Option<Callback<S>>) -> Vec<Request<S>>
     where
         I: IntoIterator<Item = H>,

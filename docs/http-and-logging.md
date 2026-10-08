@@ -20,7 +20,9 @@ Code:
 - HttpClient: `../src/http.rs`
 
 ```rust
-let request = Request::get("https://example.com/search")
+use silkworm::Request;
+
+let request = Request::<QuotesSpider>::get("https://example.com/search")
     .with_params([("q", "rust"), ("page", "1")])
     .with_header("Accept", "text/html");
 ```
@@ -80,24 +82,10 @@ The current public header type is still `HashMap<String, String>` for
 compatibility and ergonomics, but duplicate response header values are now
 normalized into merged comma-separated values.
 
-Evaluation summary:
-- Keeping `HashMap<String, String>` avoids a breaking change in `Request`,
-  `Response`, and middleware signatures.
-- `HeaderMap`-style multi-value storage would improve fidelity for
-  `Set-Cookie` and repeated headers, but would require broad API migration and
-  conversion costs across the crate.
-- Current decision: preserve the public map type for `0.1.x`; revisit a richer
-  header model in a future breaking release when API migration can be
-  coordinated.
-
-Planned migration path for `0.2`:
-1. Introduce a multi-value header type in parallel (for example,
-   `HashMap<String, Vec<String>>`) and conversion helpers from/to the current
-   map.
-2. Add `Response` helpers for repeated headers (for example cookies) while
-   keeping existing `header()` compatibility APIs during transition.
-3. Migrate middleware and utility APIs to the richer type behind a feature flag
-   first, then make it default in the `0.2` breaking release.
+Repeated values are joined with commas in the current implementation. This
+representation does not preserve separate `Set-Cookie` values; do not use it as
+a full-fidelity cookie jar. No multi-value header API or release migration is
+implemented here.
 
 ## Performance Regression Checks
 
@@ -129,8 +117,9 @@ URL preparation borrows keys and values from `Request.params` through a private
 `Cow<str>` merge helper instead of cloning each payload. Existing URL query
 pairs remain owned so the parsed URL can be mutated safely. Params still replace
 all existing values of matching keys, appended params are sorted, canonical
-URLs sort all pairs, and fragments are removed. The returned URL is still an
-owned `String`; parsing, percent-encoding and output storage allocate as needed.
+URLs sort all pairs and remove fragments. Request URL construction retains
+fragments in the returned string; they are not part of a canonical fingerprint.
+The returned URL is still an owned `String`; parsing, percent-encoding and output storage allocate as needed.
 
 Run `cargo bench --bench url_params` for URL construction and canonicalization
 with 0, 1, 8 and 64 params, Unicode values, duplicate query keys, empty fields

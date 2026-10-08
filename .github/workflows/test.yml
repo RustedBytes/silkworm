@@ -49,6 +49,14 @@ jobs:
       - name: Run examples in offline mock mode
         run: ./scripts/run_examples_offline.sh
 
+      - name: Verify documentation and Markdown examples
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          cargo doc --locked --no-deps --all-features
+          cargo test --locked --doc --all-features
+          python3 scripts/check_docs.py
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

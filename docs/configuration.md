@@ -5,6 +5,20 @@ Silkworm exposes `RunConfig` as the primary configuration surface for crawls.
 
 ## RunConfig
 
+Defaults from `RunConfig::default()`:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `concurrency` | `16` | HTTP workers; must be positive |
+| `request_timeout` | `None` | No explicit timeout configured by Silkworm |
+| `log_stats_interval` | `None` | Periodic statistics disabled |
+| `max_pending_requests` | `None` | Ready/delayed request backlog unbounded |
+| `max_seen_requests` | `Some(100_000)` | FIFO history cap; must be positive when set |
+| `html_max_size_bytes` | `5_000_000` | Retained response bytes |
+| `keep_alive` | `false` | No explicit keep-alive header injection |
+| `fail_fast` | `false` | Processing errors logged; crawl continues |
+| Middleware/pipeline lists | Empty | Built-ins are opt-in |
+
 Key settings:
 - `concurrency`: number of worker tasks and HTTP concurrency.
 - `request_timeout`: per-request timeout override.
@@ -39,7 +53,7 @@ memory costs. The item channel uses the configured cap as its size, or
 use std::time::Duration;
 use silkworm::{DelayMiddleware, JsonLinesPipeline, RunConfig, UserAgentMiddleware};
 
-let config = RunConfig::new()
+let config = RunConfig::<QuotesSpider>::new()
     .with_concurrency(32)
     .with_max_seen_requests(50_000)
     .with_request_timeout(Duration::from_secs(10))
@@ -79,6 +93,17 @@ silkworm::crawl(QuotesSpider).await?;
 silkworm::run_spider(QuotesSpider)?;
 ```
 
+## Completion and errors
+
+Await `crawl`/`crawl_with`, or let the synchronous helper return, to allow normal
+shutdown and pipeline flush. Dropping the crawl future is not an implemented
+graceful-shutdown API and does not guarantee that spider hooks or pipeline
+`close` run. Keep the Tokio runtime alive while accepted writer commands finish;
+see [pipeline cancellation](pipelines.md#file-writer-ownership-and-cancellation).
+Startup, capacity and worker-coordination failures remain fatal independently
+of `fail_fast`. Processing errors may be logged while a non-fail-fast crawl
+returns `Ok(())`; it is not a guarantee that every request or item succeeded.
+
 ## HtmlResponse Limits
 
 `html_max_size_bytes` limits two stages:
@@ -87,11 +112,20 @@ silkworm::run_spider(QuotesSpider)?;
 - HTML decoding/parsing when converting `Response` into `HtmlResponse`.
 
 If the response body exceeds the limit, only the initial slice is retained.
+The HTTP client still drains the rest of the stream, so this cap does not bound
+network bytes or total response download time. A body read error after the cap
+is still returned. A zero limit retains no body; the resulting HTML can be
+empty or incomplete. Truncation is not a selector error.
+
+The utility fetch API has separate defaults: concurrency 8, timeout 15 seconds,
+body cap 2,000,000 bytes, redirects enabled with at most 10 redirects and
+keep-alive header injection disabled. Engine crawls also follow at most 10
+redirects. A request's own timeout takes precedence over the configured timeout.
 
 Code:
 - HtmlResponse creation: `../src/response.rs`
 - Engine response handling: `../src/engine.rs`
 
 ```rust
-let config = RunConfig::new().with_html_max_size_bytes(2_000_000);
+let config = RunConfig::<QuotesSpider>::new().with_html_max_size_bytes(2_000_000);
 ```
