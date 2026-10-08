@@ -12,7 +12,8 @@ Code:
 - Middleware traits and actions: `../src/middlewares.rs`
 
 ```rust
-use silkworm::middlewares::MiddlewareFuture;
+use std::sync::Arc;
+use silkworm::{MiddlewareFuture, Request, RequestMiddleware, Spider};
 
 struct TraceMiddleware;
 
@@ -69,7 +70,14 @@ Code:
 
 ### RetryMiddleware
 
-Retries responses based on status codes and exponential backoff.
+Retries HTTP responses based on status codes and exponential backoff. It does
+not retry transport errors: those have no response for this middleware to
+process. `RetryMiddleware::new` takes the maximum additional attempts, optional
+retry status list, optional delayed status list and base delay in seconds.
+Defaults for the status list are 500, 502, 503, 504, 522, 524, 408 and 429;
+`None` for the delayed list reuses the retry list. Delayed statuses are also
+included in the retry set. Delay for attempt `n` (counting from zero) is
+`base * 2^n` when the base is positive and the status is in the delayed list.
 
 Behavior details:
 - Uses `request.meta["retry_times"]` (`request::meta_keys::RETRY_TIMES`) to
@@ -98,7 +106,7 @@ use silkworm::{
     DelayMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, UserAgentMiddleware,
 };
 
-let config = RunConfig::new()
+let config = RunConfig::<QuotesSpider>::new()
     .with_request_middleware(UserAgentMiddleware::new(
         vec![],
         Some("silkworm-rs/docs-example".to_string()),

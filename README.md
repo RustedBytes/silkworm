@@ -4,7 +4,7 @@
 [![Tests](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml/badge.svg)](https://github.com/RustedBytes/silkworm/actions/workflows/test.yml)
 
 Async-first web scraping framework for Rust. Built on [`wreq`](https://crates.io/crates/wreq) + [`scraper`](https://crates.io/crates/scraper) with
-XPath support via [`xee-xpath`](https://crates.io/crates/xee-xpath). It keeps the API small
+Optional XPath support via [`xee-xpath`](https://crates.io/crates/xee-xpath). It keeps the API small
 (Spider/Request/Response), adds middlewares and pipelines, and ships with
 structured logging so you can focus on crawling.
 
@@ -24,6 +24,15 @@ structured logging so you can focus on crawling.
 
 ## Install
 
+The current repository requires Rust **1.92 or newer** (edition 2024).
+The package is `silkworm-rs`; Rust imports use `silkworm`.
+The commands below install the published crate. To use the current checkout,
+see [development and verification](docs/development.md).
+
+Create a binary project with `cargo new my-spider`, then run these commands
+inside it. Native TLS dependencies require a C/C++ toolchain, CMake and libclang
+with its headers available to bindgen (see the development guide).
+
 ```bash
 cargo add silkworm-rs
 ```
@@ -40,9 +49,29 @@ The examples below also use [`serde_json`](https://crates.io/crates/serde_json) 
 cargo add serde_json
 ```
 
+Enable XPath explicitly when needed:
+
+```bash
+cargo add silkworm-rs --features xpath
+```
+
+The default `scraper-atomic` feature caches parsed HTML. Without default
+features, CSS remains available but documents are parsed per selection.
+`cli-examples` enables clap-based repository examples; it is not required by
+application spiders.
+
 Tip: `use silkworm::prelude::*;` for the most common types.
 
 ## Quick Start
+
+Save this complete program as `src/main.rs` and run `cargo run`. It crawls the
+external quotes demo site and emits items into the engine. With no item
+pipeline configured, items are counted but are not saved or printed. Add the
+JSON Lines pipeline below to retain them.
+
+Except for complete programs with `main`, the snippets below are fragments to
+use with this `QuotesSpider` definition. Selector fragments belong inside
+`parse`, where `response: HtmlResponse<Self>` is available.
 
 ```rust
 use serde_json::json;
@@ -87,6 +116,7 @@ fn main() -> silkworm::SilkwormResult<()> {
 
 ## Async Entry Point
 
+Keep the `QuotesSpider` definition above and replace its `main` with this one.
 If you already run a Tokio runtime, use `crawl`/`crawl_with`:
 
 ```rust
@@ -94,7 +124,7 @@ use silkworm::{crawl_with, RunConfig};
 
 #[tokio::main]
 async fn main() -> silkworm::SilkwormResult<()> {
-    let config = RunConfig::new().with_concurrency(32);
+    let config = RunConfig::<QuotesSpider>::new().with_concurrency(32);
     crawl_with(QuotesSpider, config).await
 }
 ```
@@ -106,9 +136,12 @@ Write scraped items to files or plug in your own callback:
 ```rust
 use silkworm::{run_spider_with, JsonLinesPipeline, RunConfig};
 
-let config = RunConfig::new().with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
+let config = RunConfig::<QuotesSpider>::new().with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
 run_spider_with(QuotesSpider, config)?;
 ```
+
+The pipeline fragment replaces the body of the synchronous `main` (return
+`Ok(())` after the call). JSON Lines appends to an existing file.
 
 Available pipelines:
 
@@ -119,7 +152,8 @@ Available pipelines:
 
 ## Middlewares
 
-Enable built-ins by adding them to the run config:
+Enable built-ins by adding them to the run config. The proxy address below is
+a placeholder; supply a working proxy or omit that middleware:
 
 ```rust
 use std::time::Duration;
@@ -129,7 +163,7 @@ use silkworm::{
     UserAgentMiddleware,
 };
 
-let config = RunConfig::new()
+let config = RunConfig::<QuotesSpider>::new()
     .with_request_middleware(UserAgentMiddleware::new(
         vec![],
         Some("silkworm-rs/example-spider".to_string()),
@@ -157,7 +191,7 @@ You can also build new requests fluently:
 ```rust
 use silkworm::Request;
 
-let request = Request::get("https://example.com/search")
+let request = Request::<QuotesSpider>::get("https://example.com/search")
     .with_params([("q", "rust"), ("page", "1")])
     .with_headers([
         ("Accept", "text/html"),
@@ -168,7 +202,7 @@ let request = Request::get("https://example.com/search")
 If `SkipNonHtmlMiddleware` is enabled, mark requests you want to handle as JSON/XML:
 
 ```rust
-let request = Request::get("https://example.com/api")
+let request = Request::<QuotesSpider>::get("https://example.com/api")
     .with_headers([("Accept", "application/json")])
     .with_allow_non_html(true);
 ```
@@ -176,7 +210,7 @@ let request = Request::get("https://example.com/api")
 Typed metadata accessors are available when middleware contracts need metadata:
 
 ```rust
-let mut request = Request::get("https://example.com")
+let mut request = Request::<QuotesSpider>::get("https://example.com")
     .with_proxy("http://proxy.local:8080");
 let proxy = request.proxy();
 let retries = request.retry_times();
@@ -184,7 +218,9 @@ request.set_retry_delay_secs(0.5);
 ```
 
 For per-request parsing, attach a callback with `with_callback_fn` or
-`callback_from_fn` (signature: `Fn(Arc<S>, Response<S>) -> SpiderResult<S>`).
+`callback_from_fn`. The callback returns a `Send` future whose output is
+`SpiderResult<S>` and receives `(Arc<S>, Response<S>)`.
+`with_callback_fn` accepts a closure; `callback_from_fn` takes a function pointer.
 `SpiderResult<S>` is `Result<Vec<SpiderOutput<S>>, SilkwormError>`.
 
 ## Ergonomic Selectors
@@ -216,8 +252,11 @@ for item in response.select_or_empty(".item") {
 }
 ```
 
-All these methods work with CSS selectors and XPath (use `xpath_or_empty()`,
-`xpath_first_or_none()`, etc.).
+`select*`, `text_from`, `attr_from` and `follow_css*` take CSS selectors.
+`HtmlResponse::xpath` and `xpath_first` take XPath expressions and return a
+`Selector` error when the `xpath` feature is disabled. Their convenience
+variants `xpath_or_empty` and `xpath_first_or_none` swallow that error.
+`HtmlElement` provides CSS helpers; it does not provide XPath methods.
 
 ## Configuration
 
@@ -227,7 +266,7 @@ All these methods work with CSS selectors and XPath (use `xpath_or_empty()`,
 use std::time::Duration;
 use silkworm::RunConfig;
 
-let config = RunConfig::new()
+let config = RunConfig::<QuotesSpider>::new()
     .with_concurrency(32)
     .with_max_pending_requests(500)
     .with_max_seen_requests(50_000)
@@ -238,9 +277,11 @@ let config = RunConfig::new()
     .with_keep_alive(true);
 ```
 
-`max_pending_requests` must be greater than `0` when set.  
-`max_seen_requests` defaults to `100_000` to bound dedupe memory usage.  
-Use `with_unbounded_seen_requests()` if you explicitly want no cap.  
+`max_pending_requests` bounds ready and delayed requests, excluding active
+workers. Exceeding it stops the crawl even with `fail_fast = false`. It must
+be greater than `0` when set. See [defaults and limits](docs/configuration.md).
+`max_seen_requests` defaults to `100_000` to bound dedupe memory usage.
+Use `with_unbounded_seen_requests()` if you explicitly want no cap.
 `html_max_size_bytes` also bounds how many bytes the HTTP client buffers per response.
 
 ## Logging
@@ -313,7 +354,7 @@ async fn main() -> silkworm::SilkwormResult<()> {
 
 ## Examples
 
-Check out the runnable examples in `examples/`, including:
+Check out the runnable [examples](examples/), including:
 
 - `examples/quotes_spider.rs`
 - `examples/quotes_spider_xpath.rs`
@@ -345,6 +386,16 @@ To run regression threshold checks (selectors + scheduler) locally:
 ```bash
 SILKWORM_BENCH_CHECK=1 cargo bench --bench core --features="xpath"
 ```
+
+Further microbenchmarks measure item accounting, deduplication storage and URL
+parameter preparation. See [architecture measurements](docs/architecture.md)
+and [URL/allocation measurements](docs/http-and-logging.md).
+
+## Documentation
+
+Start with the [documentation index](docs/README.md). Build the API reference
+for the current checkout with `cargo doc --no-deps --all-features --open`;
+a published docs.rs build may describe a different revision.
 
 ## License
 
