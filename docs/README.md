@@ -6,6 +6,7 @@ implementation in `src/` so the docs stay grounded in the code.
 
 ## Document Map
 
+- [Installation and optional features](installation.md)
 - [Architecture and data flow](architecture.md)
 - [TL integration and parser evaluation (#17)](parser-evaluation.md)
 - [Core concepts (Spider, Request, Response)](core-concepts.md)
@@ -14,11 +15,13 @@ implementation in `src/` so the docs stay grounded in the code.
 - [Configuration and runtime](configuration.md)
 - [HTTP client, utility API, and logging](http-and-logging.md)
 - [Errors and shared types](errors-and-types.md)
-- [Development and documentation verification](development.md)
+- [Development, runnable examples and benchmarks](development.md)
+- [Criterion benchmark workloads](benchmarks-criterion.md)
 
 ## Example conventions
 
-The README contains the complete `QuotesSpider` application. Guide snippets
+The [project README](../README.md#quick-start) contains the complete
+`QuotesSpider` application. Guide snippets
 are fragments: use that definition, add `use silkworm::*;` (the common snippet context)
 and any explicit imports shown, and put statements
 inside a function returning `SilkwormResult<()>`. Async fragments require a

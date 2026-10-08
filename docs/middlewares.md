@@ -103,7 +103,8 @@ Code:
 
 ```rust
 use silkworm::{
-    DelayMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware, UserAgentMiddleware,
+    DelayMiddleware, ProxyMiddleware, RetryMiddleware, RunConfig, SkipNonHtmlMiddleware,
+    UserAgentMiddleware,
 };
 
 let config = RunConfig::<QuotesSpider>::new()
@@ -112,6 +113,11 @@ let config = RunConfig::<QuotesSpider>::new()
         Some("silkworm-rs/docs-example".to_string()),
     ))
     .with_request_middleware(DelayMiddleware::fixed(0.25))
+    // Replace with a working proxy, or omit this middleware.
+    .with_request_middleware(ProxyMiddleware::new(
+        vec!["http://proxy.local:8080".to_string()],
+        true,
+    ))
     .with_response_middleware(RetryMiddleware::new(3, None, None, 0.5))
     .with_response_middleware(SkipNonHtmlMiddleware::new(None, 1024));
 ```

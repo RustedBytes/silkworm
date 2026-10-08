@@ -61,6 +61,15 @@ RUSTUP_TOOLCHAIN=1.92.0 ./scripts/run_examples_offline.sh
 The script sets offline mode itself and supplies `xpath`/`cli-examples` flags
 where required. Its export files go under `/tmp`; no live websites are used.
 
+## Runnable examples
+
+Check out the runnable [examples](../examples/), including:
+
+- `examples/quotes_spider.rs`
+- `examples/quotes_spider_xpath.rs`
+- `examples/hackernews_spider.rs`
+- `examples/sitemap_spider.rs`
+
 ## Code checks
 
 For code changes, the [CI workflow](../.github/workflows/test.yml) runs:
@@ -100,3 +109,30 @@ General → Workflow permissions. The workflow explicitly dispatches `test.yml` 
 its new branch, so tests can run even when the branch is pushed with `GITHUB_TOKEN`.
 Review and merge the version PR normally. This workflow does not create a tag,
 publish to crates.io or create a GitHub Release.
+
+## Benchmarks
+
+For statistical public-API benchmarks with Criterion, run
+`cargo bench -p silkworm-rs --bench criterion_api` (optionally add
+`--features xpath`). See [Criterion workloads and reproducible comparisons](benchmarks-criterion.md).
+
+Run the built-in benchmark suite:
+
+```bash
+cargo bench --bench core --features="xpath"
+```
+
+The suite measures request construction/cloning, response decoding, URL follow
+helpers, and CSS/XPath extraction (including parse-each-time vs cached paths).
+
+To run regression threshold checks (selectors + scheduler) locally:
+
+```bash
+SILKWORM_BENCH_CHECK=1 cargo bench --bench core --features="xpath"
+```
+
+CI runs the threshold check in a dedicated nightly/manual benchmark job.
+
+Further microbenchmarks measure item accounting, deduplication storage and URL
+parameter preparation. See [architecture measurements](architecture.md)
+and [URL/allocation measurements](http-and-logging.md).
