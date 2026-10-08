@@ -2538,6 +2538,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustedbytes-tl"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f6e4c4475bbaf3aa00136eb524efe5b5e6fe371cce06e6aec40402662322fbe"
+dependencies = [
+ "memchr",
+ "web_atoms",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2681,6 +2691,7 @@ dependencies = [
  "http-body-util",
  "rand 0.10.3",
  "regex",
+ "rustedbytes-tl",
  "scraper",
  "serde",
  "serde_json",

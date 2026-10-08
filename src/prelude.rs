@@ -11,3 +11,6 @@ pub use crate::response::HtmlResponse;
 pub use crate::runner::RunConfig;
 pub use crate::spider::Spider;
 pub use crate::types::{Item, Meta, Params, item_from, item_into};
+
+#[cfg(feature = "tl-parser")]
+pub use crate::tl::{TlDocument, TlElement};

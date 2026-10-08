@@ -486,6 +486,20 @@ impl<S> HtmlResponse<S> {
         self.follow_urls_outputs(self.select_attrs(selector, attr_name))
     }
 
+    /// Parse a separate owned TL document from the same decoded, size-limited source.
+    ///
+    /// Requires `tl-parser`. This is an explicit alternative with a narrower HTML/CSS
+    /// contract; existing selection methods continue to use scraper. Keep the returned
+    /// document to reuse its DOM. Each call creates a fresh snapshot, independent of
+    /// subsequent response mutations and of the scraper cache.
+    ///
+    /// # Errors
+    /// Returns a selector error if TL cannot parse the source.
+    #[cfg(feature = "tl-parser")]
+    pub fn tl_document(&self) -> SilkwormResult<crate::tl::TlDocument> {
+        crate::tl::TlDocument::parse(self.html_source().to_owned())
+    }
+
     fn html_source(&self) -> &str {
         self.cached_source
             .get_or_init(|| {
