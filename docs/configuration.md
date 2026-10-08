@@ -9,8 +9,9 @@ Key settings:
 - `concurrency`: number of worker tasks and HTTP concurrency.
 - `request_timeout`: per-request timeout override.
 - `log_stats_interval`: optional periodic stats logging.
-- `max_pending_requests`: size of the request queue (must be greater than 0
-  when set).
+- `max_pending_requests`: hard cap for the combined ready and delayed request
+  backlog (must be greater than 0 when set). Active workers do not count toward
+  this cap. `None` leaves the request backlog unbounded.
 - `max_seen_requests`: cap for the in-memory de-duplication set (defaults to
   `100_000`).
 - `with_unbounded_seen_requests()`: disables the cap for long-running crawls
@@ -23,6 +24,16 @@ Key settings:
 
 Code:
 - RunConfig: `../src/runner.rs`
+
+When a configured request cap is exceeded, the crawl returns a `Spider` capacity
+error and stops, even with `fail_fast = false`. Workers produce new requests as
+well as consume them; making every producer wait for a free slot could deadlock
+all workers. The engine therefore reports overload instead of silently dropping
+requests or waiting indefinitely. Increase the cap or reduce spider fan-out
+when this happens. The cap counts requests, not bytes: active responses,
+callback output vectors, item queues and de-duplication history have separate
+memory costs. The item channel uses the configured cap as its size, or
+`concurrency * 10` when no request cap is configured.
 
 ```rust
 use std::time::Duration;

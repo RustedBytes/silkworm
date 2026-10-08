@@ -120,6 +120,8 @@ pub struct EngineConfig<S: Spider> {
     pub item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
     pub request_timeout: Option<Duration>,
     pub log_stats_interval: Option<Duration>,
+    /// Hard limit for ready and delayed requests, excluding active workers.
+    /// Exceeding a configured limit aborts the crawl with a capacity error.
     pub max_pending_requests: Option<usize>,
     pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
@@ -166,6 +168,8 @@ struct QueuedRequest<S: Spider> {
     request: Request<S>,
     priority: i32,
     sequence: u64,
+    pending_guard: Option<PendingWorkGuard>,
+    queue_slot: Option<QueueSlot>,
 }
 
 impl<S: Spider> QueuedRequest<S> {
@@ -174,6 +178,8 @@ impl<S: Spider> QueuedRequest<S> {
             priority: request.priority,
             request,
             sequence,
+            pending_guard: None,
+            queue_slot: None,
         }
     }
 }
@@ -204,10 +210,9 @@ impl<S: Spider> Ord for QueuedRequest<S> {
 struct EngineState<S: Spider> {
     spider: Arc<S>,
     http: HttpClient,
-    queue_tx: mpsc::Sender<QueuedRequest<S>>,
-    queue_rx: AsyncMutex<Option<mpsc::Receiver<QueuedRequest<S>>>>,
-    item_tx: mpsc::Sender<Item>,
-    item_rx: AsyncMutex<Option<mpsc::Receiver<Item>>>,
+    queue_budget: Option<Arc<QueueBudget>>,
+    item_tx: mpsc::Sender<QueuedItem>,
+    item_rx: AsyncMutex<Option<mpsc::Receiver<QueuedItem>>>,
     ready_queue: AsyncMutex<BinaryHeap<QueuedRequest<S>>>,
     ready_notify: Notify,
     enqueue_sequence: AtomicU64,
@@ -216,10 +221,10 @@ struct EngineState<S: Spider> {
     stop: AtomicBool,
     stop_tx: watch::Sender<bool>,
     stop_rx: watch::Receiver<bool>,
-    pending: AtomicUsize,
-    pending_notify: Notify,
-    item_pending: AtomicUsize,
-    item_pending_notify: Notify,
+    pending: Arc<AtomicUsize>,
+    pending_notify: Arc<Notify>,
+    item_pending: Arc<AtomicUsize>,
+    item_pending_notify: Arc<Notify>,
     request_middlewares: Vec<Arc<dyn RequestMiddleware<S>>>,
     response_middlewares: Vec<Arc<dyn ResponseMiddleware<S>>>,
     item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
@@ -233,54 +238,57 @@ struct EngineState<S: Spider> {
     scheduled_requests: AsyncMutex<JoinSet<()>>,
 }
 
-struct PendingRequestGuard<S: Spider> {
-    state: Arc<EngineState<S>>,
-    finished: bool,
+struct QueueBudget {
+    limit: usize,
+    waiting: AtomicUsize,
 }
 
-impl<S: Spider> PendingRequestGuard<S> {
-    fn new(state: Arc<EngineState<S>>) -> Self {
-        PendingRequestGuard {
-            state,
-            finished: false,
-        }
-    }
+struct QueueSlot(Arc<QueueBudget>);
 
-    fn finish(&mut self) {
-        if self.finished {
-            return;
-        }
-        self.finished = true;
-        finish_request_state(self.state.as_ref());
+impl QueueBudget {
+    fn reserve(self: &Arc<Self>) -> Option<QueueSlot> {
+        self.waiting
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |waiting| {
+                (waiting < self.limit).then(|| waiting + 1)
+            })
+            .ok()
+            .map(|_| QueueSlot(self.clone()))
     }
 }
 
-impl<S: Spider> Drop for PendingRequestGuard<S> {
+impl Drop for QueueSlot {
     fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-        finish_request_state(self.state.as_ref());
-        self.finished = true;
+        self.0.waiting.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
-fn finish_request_state<S: Spider>(state: &EngineState<S>) {
-    let _ = state
-        .pending
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-            Some(value.saturating_sub(1))
-        });
-    state.pending_notify.notify_waiters();
+// Keep only accounting handles here: holding EngineState would create a cycle
+// between the engine's ready queue and its queued requests.
+struct PendingWorkGuard {
+    pending: Arc<AtomicUsize>,
+    notify: Arc<Notify>,
 }
 
-fn finish_item_state<S: Spider>(state: &EngineState<S>) {
-    let _ = state
-        .item_pending
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-            Some(value.saturating_sub(1))
-        });
-    state.item_pending_notify.notify_waiters();
+impl PendingWorkGuard {
+    fn new(pending: &Arc<AtomicUsize>, notify: &Arc<Notify>) -> Self {
+        pending.fetch_add(1, Ordering::SeqCst);
+        Self {
+            pending: pending.clone(),
+            notify: notify.clone(),
+        }
+    }
+}
+
+impl Drop for PendingWorkGuard {
+    fn drop(&mut self) {
+        self.pending.fetch_sub(1, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+}
+
+struct QueuedItem {
+    item: Item,
+    pending_guard: PendingWorkGuard,
 }
 
 fn signal_stop_state<S: Spider>(state: &EngineState<S>) {
@@ -347,8 +355,9 @@ impl<S: Spider> Engine<S> {
                 "max_pending_requests must be greater than zero when set".to_string(),
             ));
         }
-        let queue_size = max_pending_requests.unwrap_or(concurrency * 10).max(1);
-        let (queue_tx, queue_rx) = mpsc::channel(queue_size);
+        let queue_size = max_pending_requests
+            .unwrap_or(concurrency.saturating_mul(10))
+            .max(1);
         let (item_tx, item_rx) = mpsc::channel(queue_size);
         let (stop_tx, stop_rx) = watch::channel(false);
         let http = HttpClient::new(
@@ -365,8 +374,12 @@ impl<S: Spider> Engine<S> {
         let state = EngineState {
             spider,
             http,
-            queue_tx,
-            queue_rx: AsyncMutex::new(Some(queue_rx)),
+            queue_budget: max_pending_requests.map(|limit| {
+                Arc::new(QueueBudget {
+                    limit,
+                    waiting: AtomicUsize::new(0),
+                })
+            }),
             item_tx,
             item_rx: AsyncMutex::new(Some(item_rx)),
             ready_queue: AsyncMutex::new(BinaryHeap::new()),
@@ -377,10 +390,10 @@ impl<S: Spider> Engine<S> {
             stop: AtomicBool::new(false),
             stop_tx,
             stop_rx,
-            pending: AtomicUsize::new(0),
-            pending_notify: Notify::new(),
-            item_pending: AtomicUsize::new(0),
-            item_pending_notify: Notify::new(),
+            pending: Arc::new(AtomicUsize::new(0)),
+            pending_notify: Arc::new(Notify::new()),
+            item_pending: Arc::new(AtomicUsize::new(0)),
+            item_pending_notify: Arc::new(Notify::new()),
             request_middlewares,
             response_middlewares,
             item_pipelines,
@@ -411,7 +424,6 @@ impl<S: Spider> Engine<S> {
         );
         self.state.stats.set_start_time(Instant::now());
 
-        let mut dispatcher = self.spawn_dispatcher().await?;
         let mut item_worker = self.spawn_item_worker().await?;
 
         let mut join_set = JoinSet::new();
@@ -443,9 +455,9 @@ impl<S: Spider> Engine<S> {
             self.state
                 .logger
                 .error("Failed to open spider", &[("error", err.to_string())]);
-            run_error = Some(err);
+            run_error = Some(self.take_fatal_error().await.unwrap_or(err));
         } else if let Err(err) = self
-            .await_idle_or_worker_health(&mut join_set, &dispatcher, &item_worker)
+            .await_idle_or_worker_health(&mut join_set, &item_worker)
             .await
         {
             self.state
@@ -456,6 +468,7 @@ impl<S: Spider> Engine<S> {
 
         self.shutdown();
         self.shutdown_scheduled_requests().await;
+        self.state.ready_queue.lock().await.clear();
 
         if run_error.is_none() {
             if let Some(err) = self.join_workers(&mut join_set).await {
@@ -466,12 +479,6 @@ impl<S: Spider> Engine<S> {
         }
 
         if let Some(err) = self.join_item_worker(&mut item_worker).await
-            && run_error.is_none()
-        {
-            run_error = Some(err);
-        }
-
-        if let Some(err) = self.join_dispatcher(&mut dispatcher).await
             && run_error.is_none()
         {
             run_error = Some(err);
@@ -545,83 +552,152 @@ impl<S: Spider> Engine<S> {
         Ok(())
     }
 
-    async fn enqueue(&self, mut req: Request<S>) -> SilkwormResult<()> {
-        let retry_delay = take_retry_delay(&mut req);
+    fn try_queue_slot(&self) -> Result<Option<QueueSlot>, String> {
+        match &self.state.queue_budget {
+            None => Ok(None),
+            Some(budget) => budget.reserve().map(Some).ok_or_else(|| format!(
+                "max_pending_requests capacity ({}) exceeded; increase the limit or reduce spider fan-out",
+                budget.limit,
+            )),
+        }
+    }
 
-        if !req.dont_filter {
+    async fn check_queue_slot(
+        &self,
+        slot: Result<Option<QueueSlot>, String>,
+    ) -> SilkwormResult<Option<QueueSlot>> {
+        match slot {
+            Ok(slot) => Ok(slot),
+            Err(message) => {
+                // Workers also produce requests. Waiting for capacity here can
+                // deadlock all consumers, so overload must be an explicit error.
+                record_fatal_error_state(
+                    self.state.as_ref(),
+                    SilkwormError::Spider(message.clone()),
+                )
+                .await;
+                self.shutdown();
+                Err(SilkwormError::Spider(message))
+            }
+        }
+    }
+
+    async fn enqueue(&self, mut req: Request<S>) -> SilkwormResult<()> {
+        if self.state.stop.load(Ordering::SeqCst) {
+            return Err(SilkwormError::Spider("Engine is stopping".to_string()));
+        }
+        let retry_delay = take_retry_delay(&mut req);
+        let slot = if req.dont_filter {
+            self.try_queue_slot()
+        } else {
             let fingerprint = request_fingerprint(&req);
             let mut seen = self.state.seen.lock().await;
-            if !seen.insert_if_new(&fingerprint) {
+            if seen.entries.contains(fingerprint.as_str()) {
                 self.state
                     .logger
                     .debug("Skipping already seen request", &[("url", req.url.clone())]);
                 return Ok(());
             }
-            self.state.seen_count.fetch_add(1, Ordering::SeqCst);
-        }
-
+            let slot = self.try_queue_slot();
+            if slot.is_ok() {
+                seen.insert_if_new(&fingerprint);
+                self.state.seen_count.fetch_add(1, Ordering::SeqCst);
+            }
+            slot
+        };
+        let slot = self.check_queue_slot(slot).await?;
         if let Some(delay) = retry_delay {
-            return self.enqueue_delayed(req, delay).await;
+            return self.enqueue_delayed_with_slot(req, delay, slot).await;
         }
-
-        self.enqueue_immediate(req).await
+        let queued = self.track_request(req, slot);
+        self.enqueue_immediate(queued).await
     }
 
-    async fn enqueue_immediate(&self, req: Request<S>) -> SilkwormResult<()> {
+    fn track_request(&self, req: Request<S>, slot: Option<QueueSlot>) -> QueuedRequest<S> {
+        let mut queued = QueuedRequest::new(req, next_queue_sequence(self.state.as_ref()));
+        queued.pending_guard = Some(PendingWorkGuard::new(
+            &self.state.pending,
+            &self.state.pending_notify,
+        ));
+        queued.queue_slot = slot;
+        queued
+    }
+
+    async fn enqueue_immediate(&self, queued: QueuedRequest<S>) -> SilkwormResult<()> {
         self.state
             .logger
-            .debug("Enqueued request", &[("url", req.url.clone())]);
-
-        let queued = QueuedRequest::new(req, next_queue_sequence(self.state.as_ref()));
-        self.state.pending.fetch_add(1, Ordering::SeqCst);
-        if let Err(err) = self.state.queue_tx.send(queued).await {
-            finish_request_state(self.state.as_ref());
-            return Err(SilkwormError::Http(format!(
-                "Failed to enqueue request: {err}"
-            )));
+            .debug("Enqueued request", &[("url", queued.request.url.clone())]);
+        let mut ready = self.state.ready_queue.lock().await;
+        if self.state.stop.load(Ordering::SeqCst) {
+            return Err(SilkwormError::Spider("Engine is stopping".to_string()));
         }
+        ready.push(queued);
+        drop(ready);
+        self.state.ready_notify.notify_one();
         Ok(())
     }
 
     async fn enqueue_delayed(&self, req: Request<S>, delay: Duration) -> SilkwormResult<()> {
-        let delay_seconds = format!("{:.3}", delay.as_secs_f64());
+        let slot = self.check_queue_slot(self.try_queue_slot()).await?;
+        self.enqueue_delayed_with_slot(req, delay, slot).await
+    }
+
+    async fn enqueue_delayed_with_slot(
+        &self,
+        req: Request<S>,
+        delay: Duration,
+        slot: Option<QueueSlot>,
+    ) -> SilkwormResult<()> {
         self.state.logger.debug(
             "Scheduled delayed request",
-            &[("url", req.url.clone()), ("delay_seconds", delay_seconds)],
+            &[
+                ("url", req.url.clone()),
+                ("delay_seconds", format!("{:.3}", delay.as_secs_f64())),
+            ],
         );
-        self.state.pending.fetch_add(1, Ordering::SeqCst);
-
-        let task_state = self.state.clone();
-        let mut stop_rx = task_state.stop_rx.clone();
+        let mut queued = self.track_request(req, slot);
+        let engine = Self {
+            state: self.state.clone(),
+        };
+        let mut stop_rx = self.state.stop_rx.clone();
         let mut scheduled = self.state.scheduled_requests.lock().await;
+        if self.state.stop.load(Ordering::SeqCst) {
+            return Err(SilkwormError::Spider("Engine is stopping".to_string()));
+        }
+        while let Some(result) = scheduled.try_join_next() {
+            if let Err(err) = result {
+                self.state.logger.error(
+                    "Scheduled request task failed",
+                    &[("error", err.to_string())],
+                );
+            }
+        }
         scheduled.spawn(async move {
             tokio::select! {
                 () = tokio::time::sleep(delay) => {
-                    if task_state.stop.load(Ordering::SeqCst) {
-                        finish_request_state(task_state.as_ref());
-                        return;
-                    }
-                    let queued = QueuedRequest::new(req, next_queue_sequence(task_state.as_ref()));
-                    if let Err(err) = task_state.queue_tx.send(queued).await {
-                        task_state.logger.error(
-                            "Failed to enqueue delayed request",
-                            &[("error", err.to_string())],
-                        );
-                        finish_request_state(task_state.as_ref());
+                    if !engine.state.stop.load(Ordering::SeqCst) {
+                        // Equal-priority FIFO starts when the delay expires,
+                        // matching the previous delayed-admission behavior.
+                        queued.sequence = next_queue_sequence(engine.state.as_ref());
+                        let _ = engine.enqueue_immediate(queued).await;
                     }
                 }
-                _ = stop_rx.changed() => {
-                    finish_request_state(task_state.as_ref());
-                }
+                _ = stop_rx.changed() => {}
             }
+            // Dropping a cancelled scheduled request releases both counters.
         });
         Ok(())
     }
 
     async fn enqueue_item(&self, item: Item) -> SilkwormResult<()> {
-        self.state.item_pending.fetch_add(1, Ordering::SeqCst);
-        if let Err(err) = self.state.item_tx.send(item).await {
-            finish_item_state(self.state.as_ref());
+        let queued = QueuedItem {
+            item,
+            pending_guard: PendingWorkGuard::new(
+                &self.state.item_pending,
+                &self.state.item_pending_notify,
+            ),
+        };
+        if let Err(err) = self.state.item_tx.send(queued).await {
             return Err(SilkwormError::Pipeline(format!(
                 "Failed to enqueue item for pipelines: {err}"
             )));
@@ -631,12 +707,15 @@ impl<S: Spider> Engine<S> {
 
     async fn worker(self) {
         loop {
-            let Some(req) = self.next_ready_request().await else {
+            let Some(queued) = self.next_ready_request().await else {
                 break;
             };
-            let mut pending_guard = PendingRequestGuard::new(self.state.clone());
-
-            let result = self.process_request(req).await;
+            let QueuedRequest {
+                request,
+                pending_guard,
+                ..
+            } = queued;
+            let result = self.process_request(request).await;
             if let Err(err) = result {
                 self.state.stats.errors.fetch_add(1, Ordering::SeqCst);
                 let error_text = err.to_string();
@@ -645,51 +724,18 @@ impl<S: Spider> Engine<S> {
                     .error("Failed to process request", &[("error", error_text)]);
                 if self.state.fail_fast {
                     record_fatal_error_state(self.state.as_ref(), err).await;
-                    pending_guard.finish();
+                    drop(pending_guard);
                     self.shutdown();
                     break;
                 }
             }
 
-            pending_guard.finish();
+            drop(pending_guard);
 
             if self.state.stop.load(Ordering::SeqCst) {
                 break;
             }
         }
-    }
-
-    async fn spawn_dispatcher(&self) -> SilkwormResult<tokio::task::JoinHandle<()>> {
-        let mut rx_slot = self.state.queue_rx.lock().await;
-        let Some(mut receiver) = rx_slot.take() else {
-            return Err(SilkwormError::Spider(
-                "request dispatcher already started".to_string(),
-            ));
-        };
-
-        let state = self.state.clone();
-        Ok(tokio::spawn(async move {
-            let mut stop_rx = state.stop_rx.clone();
-            loop {
-                if state.stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                tokio::select! {
-                    maybe_request = receiver.recv() => {
-                        let Some(queued) = maybe_request else { break };
-                        let mut ready = state.ready_queue.lock().await;
-                        ready.push(queued);
-                        drop(ready);
-                        state.ready_notify.notify_one();
-                    }
-                    _ = stop_rx.changed() => {
-                        if *stop_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }))
     }
 
     async fn spawn_item_worker(&self) -> SilkwormResult<tokio::task::JoinHandle<()>> {
@@ -705,14 +751,12 @@ impl<S: Spider> Engine<S> {
             let mut stop_rx = state.stop_rx.clone();
             loop {
                 if state.stop.load(Ordering::SeqCst) {
-                    while receiver.try_recv().is_ok() {
-                        finish_item_state(state.as_ref());
-                    }
+                    while receiver.try_recv().is_ok() {}
                     break;
                 }
                 tokio::select! {
                     maybe_item = receiver.recv() => {
-                        let Some(item) = maybe_item else { break };
+                        let Some(QueuedItem { item, pending_guard }) = maybe_item else { break };
                         let mut current = item;
                         let mut stop_after_item = false;
                         for pipe in &state.item_pipelines {
@@ -733,16 +777,14 @@ impl<S: Spider> Engine<S> {
                                 }
                             }
                         }
-                        finish_item_state(state.as_ref());
+                        drop(pending_guard);
                         if stop_after_item {
                             signal_stop_state(state.as_ref());
                             break;
                         }
                     }
                     _ = stop_rx.changed() => {
-                        while receiver.try_recv().is_ok() {
-                            finish_item_state(state.as_ref());
-                        }
+                        while receiver.try_recv().is_ok() {}
                         break;
                     }
                 }
@@ -750,22 +792,26 @@ impl<S: Spider> Engine<S> {
         }))
     }
 
-    async fn next_ready_request(&self) -> Option<Request<S>> {
+    async fn next_ready_request(&self) -> Option<QueuedRequest<S>> {
         let mut stop_rx = self.state.stop_rx.clone();
         loop {
+            let notified = self.state.ready_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.state.stop.load(Ordering::SeqCst) {
                 return None;
             }
 
-            if let Some(request) = {
+            if let Some(mut queued) = {
                 let mut ready = self.state.ready_queue.lock().await;
-                ready.pop().map(|queued| queued.request)
+                ready.pop()
             } {
-                return Some(request);
+                drop(queued.queue_slot.take());
+                return Some(queued);
             }
 
             tokio::select! {
-                () = self.state.ready_notify.notified() => {}
+                () = notified => {}
                 _ = stop_rx.changed() => {
                     if *stop_rx.borrow() {
                         return None;
@@ -845,10 +891,16 @@ impl<S: Spider> Engine<S> {
     async fn await_idle_or_worker_health(
         &self,
         workers: &mut JoinSet<()>,
-        dispatcher: &tokio::task::JoinHandle<()>,
         item_worker: &tokio::task::JoinHandle<()>,
     ) -> SilkwormResult<()> {
         loop {
+            let pending_changed = self.state.pending_notify.notified();
+            let items_changed = self.state.item_pending_notify.notified();
+            let fatal_error = self.state.fatal_error_notify.notified();
+            tokio::pin!(pending_changed, items_changed, fatal_error);
+            pending_changed.as_mut().enable();
+            items_changed.as_mut().enable();
+            fatal_error.as_mut().enable();
             self.reap_scheduled_requests().await;
             if let Some(err) = self.take_fatal_error().await {
                 return Err(err);
@@ -858,11 +910,6 @@ impl<S: Spider> Engine<S> {
             {
                 return Ok(());
             }
-            if dispatcher.is_finished() {
-                return Err(SilkwormError::Spider(
-                    "request dispatcher exited unexpectedly".to_string(),
-                ));
-            }
             if item_worker.is_finished() {
                 return Err(SilkwormError::Spider(
                     "item worker exited unexpectedly".to_string(),
@@ -870,9 +917,9 @@ impl<S: Spider> Engine<S> {
             }
 
             tokio::select! {
-                () = self.state.pending_notify.notified() => {}
-                () = self.state.item_pending_notify.notified() => {}
-                () = self.state.fatal_error_notify.notified() => {
+                () = pending_changed => {}
+                () = items_changed => {}
+                () = fatal_error => {
                     if let Some(err) = self.take_fatal_error().await {
                         return Err(err);
                     }
@@ -891,23 +938,6 @@ impl<S: Spider> Engine<S> {
                         )),
                     };
                 }
-            }
-        }
-    }
-
-    async fn join_dispatcher(
-        &self,
-        dispatcher: &mut tokio::task::JoinHandle<()>,
-    ) -> Option<SilkwormError> {
-        match dispatcher.await {
-            Ok(()) => None,
-            Err(err) => {
-                self.state
-                    .logger
-                    .error("Request dispatcher failed", &[("error", format!("{err}"))]);
-                Some(SilkwormError::Spider(format!(
-                    "request dispatcher failed: {err}"
-                )))
             }
         }
     }
@@ -1269,6 +1299,359 @@ mod tests {
             heap.pop().map(|queued| queued.request.url),
             Some("https://example.com/low".to_string())
         );
+    }
+
+    fn bounded_engine(limit: usize) -> Engine<TestSpider> {
+        let config = crate::runner::RunConfig::<TestSpider>::new()
+            .with_concurrency(1)
+            .with_max_pending_requests(limit);
+        Engine::new(TestSpider, config.into()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn capacity_covers_ready_and_delayed_requests_and_excludes_active_work() {
+        let engine = bounded_engine(2);
+        engine
+            .enqueue(Request::new("https://example.com/ready"))
+            .await
+            .unwrap();
+        engine
+            .enqueue_delayed(
+                Request::new("https://example.com/delayed"),
+                Duration::from_secs(3600),
+            )
+            .await
+            .unwrap();
+        let budget = engine.state.queue_budget.as_ref().unwrap();
+        assert_eq!(budget.waiting.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 2);
+        let active = engine.next_ready_request().await.unwrap();
+        assert_eq!(budget.waiting.load(Ordering::SeqCst), 1);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 2);
+        engine
+            .enqueue(Request::new("https://example.com/next"))
+            .await
+            .unwrap();
+        assert_eq!(budget.waiting.load(Ordering::SeqCst), 2);
+        drop(active);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 2);
+        engine.shutdown();
+        engine.shutdown_scheduled_requests().await;
+        engine.state.ready_queue.lock().await.clear();
+        assert_eq!(budget.waiting.load(Ordering::SeqCst), 0);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn full_queue_deduplicates_existing_requests_but_reports_new_overload() {
+        let engine = bounded_engine(1);
+        engine
+            .enqueue(Request::new("https://example.com/first"))
+            .await
+            .unwrap();
+        engine
+            .enqueue(Request::new("https://example.com/first"))
+            .await
+            .unwrap();
+        assert!(!engine.state.stop.load(Ordering::SeqCst));
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 1);
+        let err = engine
+            .enqueue(Request::new("https://example.com/overflow"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_pending_requests capacity (1) exceeded")
+        );
+        assert!(engine.state.stop.load(Ordering::SeqCst));
+        assert!(engine.take_fatal_error().await.is_some());
+        assert_eq!(engine.state.seen_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !engine
+                .state
+                .seen
+                .lock()
+                .await
+                .entries
+                .contains("GET https://example.com/overflow")
+        );
+        engine.state.ready_queue.lock().await.clear();
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_admission_releases_pending_and_capacity() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        let engine = bounded_engine(1);
+        let ready = engine.state.ready_queue.lock().await;
+        let mut enqueue = Box::pin(engine.enqueue(Request::new("https://example.com/cancelled")));
+        assert!(poll_fn(|cx| Poll::Ready(enqueue.as_mut().poll(cx).is_pending())).await);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            1
+        );
+        drop(enqueue);
+        drop(ready);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            0
+        );
+
+        let scheduled = engine.state.scheduled_requests.lock().await;
+        let mut enqueue = Box::pin(engine.enqueue_delayed(
+            Request::new("https://example.com/delayed"),
+            Duration::from_secs(3600),
+        ));
+        assert!(poll_fn(|cx| Poll::Ready(enqueue.as_mut().poll(cx).is_pending())).await);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 1);
+        drop(enqueue);
+        drop(scheduled);
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn real_ready_queue_preserves_priority_fifo_and_releases_all_slots() {
+        let engine = bounded_engine(3);
+        for (url, priority) in [("low", 1), ("high-old", 3), ("high-new", 3)] {
+            engine
+                .enqueue(Request::new(format!("https://example.com/{url}")).with_priority(priority))
+                .await
+                .unwrap();
+        }
+        for url in ["high-old", "high-new", "low"] {
+            let queued = engine.next_ready_request().await.unwrap();
+            assert_eq!(queued.request.url, format!("https://example.com/{url}"));
+            drop(queued);
+        }
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_request_accounting_does_not_keep_engine_alive() {
+        let engine = bounded_engine(1);
+        engine
+            .enqueue(Request::new("https://example.com/queued"))
+            .await
+            .unwrap();
+        let weak = Arc::downgrade(&engine.state);
+        drop(engine);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_overload_returns_error_and_releases_delayed_requests() {
+        struct BurstStartSpider;
+        impl Spider for BurstStartSpider {
+            fn name(&self) -> &str {
+                "burst-start"
+            }
+            async fn start_requests(&self) -> Vec<Request<Self>> {
+                (0..10)
+                    .map(|id| {
+                        let mut req = Request::new(format!("https://example.com/{id}"));
+                        req.set_retry_delay_secs(3600.0);
+                        req
+                    })
+                    .collect()
+            }
+            async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+                Ok(Vec::new())
+            }
+        }
+        let config = crate::runner::RunConfig::<BurstStartSpider>::new()
+            .with_concurrency(2)
+            .with_max_pending_requests(2)
+            .with_fail_fast(false);
+        let engine = Engine::new(BurstStartSpider, config.into()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), engine.run())
+            .await
+            .expect("overload must not deadlock");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("max_pending_requests capacity")
+        );
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_item_admission_releases_its_pending_count() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        let engine = bounded_engine(1);
+        engine.enqueue_item(Item::from(1)).await.unwrap();
+        let mut enqueue = Box::pin(engine.enqueue_item(Item::from(2)));
+        assert!(poll_fn(|cx| Poll::Ready(enqueue.as_mut().poll(cx).is_pending())).await);
+        assert_eq!(engine.state.item_pending.load(Ordering::SeqCst), 2);
+        drop(enqueue);
+        assert_eq!(engine.state.item_pending.load(Ordering::SeqCst), 1);
+        let mut receiver = engine.state.item_rx.lock().await.take().unwrap();
+        drop(receiver.recv().await.unwrap());
+        assert_eq!(engine.state.item_pending.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn failing_item_worker_releases_buffered_items() {
+        struct FailingPipeline;
+        impl ItemPipeline<TestSpider> for FailingPipeline {
+            fn open(
+                &self,
+                _spider: Arc<TestSpider>,
+            ) -> PipelineFuture<'_, crate::SilkwormResult<()>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn close(
+                &self,
+                _spider: Arc<TestSpider>,
+            ) -> PipelineFuture<'_, crate::SilkwormResult<()>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn process_item(
+                &self,
+                _item: Item,
+                _spider: Arc<TestSpider>,
+            ) -> PipelineFuture<'_, crate::SilkwormResult<Item>> {
+                Box::pin(async { Err(SilkwormError::Pipeline("write failed".to_string())) })
+            }
+        }
+        let config = crate::runner::RunConfig::<TestSpider>::new()
+            .with_concurrency(1)
+            .with_max_pending_requests(4)
+            .with_fail_fast(true)
+            .with_item_pipeline(FailingPipeline);
+        let engine = Engine::new(TestSpider, config.into()).unwrap();
+        for id in 0..3 {
+            engine.enqueue_item(Item::from(id)).await.unwrap();
+        }
+        let task = engine.spawn_item_worker().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(engine.state.item_pending.load(Ordering::SeqCst), 0);
+        assert!(engine.take_fatal_error().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn callback_fanout_overload_stops_crawl_even_without_fail_fast() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        struct FanoutSpider {
+            url: String,
+        }
+        impl Spider for FanoutSpider {
+            fn name(&self) -> &str {
+                "fanout"
+            }
+            fn start_urls(&self) -> Vec<&str> {
+                vec![&self.url]
+            }
+            async fn parse(&self, _response: HtmlResponse<Self>) -> SpiderResult<Self> {
+                Ok((0..5)
+                    .map(|id| {
+                        let mut req = Request::new(format!("{}/child/{id}", self.url));
+                        req.set_retry_delay_secs(3600.0);
+                        crate::request::SpiderOutput::Request(Box::new(req))
+                    })
+                    .collect())
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let mut received = Vec::new();
+            loop {
+                let read = socket.read(&mut request).await.unwrap();
+                assert!(
+                    read > 0,
+                    "connection closed before complete request headers"
+                );
+                received.extend_from_slice(&request[..read]);
+                if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let config = crate::runner::RunConfig::<FanoutSpider>::new()
+            .with_concurrency(2)
+            .with_max_pending_requests(2)
+            .with_fail_fast(false);
+        let engine = Engine::new(FanoutSpider { url }, config.into()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), engine.run())
+            .await
+            .expect("fan-out must not deadlock");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("max_pending_requests capacity (2) exceeded")
+        );
+        assert_eq!(engine.state.pending.load(Ordering::SeqCst), 0);
+        assert_eq!(engine.state.item_pending.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .state
+                .queue_budget
+                .as_ref()
+                .unwrap()
+                .waiting
+                .load(Ordering::SeqCst),
+            0
+        );
+        assert!(engine.state.ready_queue.lock().await.is_empty());
+        assert!(engine.state.scheduled_requests.lock().await.is_empty());
+        server.await.unwrap();
     }
 
     #[test]
