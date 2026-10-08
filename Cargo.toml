@@ -33,6 +33,10 @@ harness = false
 name = "url_params"
 harness = false
 
+[[bench]]
+name = "csv_rows"
+harness = false
+
 [[example]]
 name = "quotes_spider_xpath"
 required-features = ["xpath"]
