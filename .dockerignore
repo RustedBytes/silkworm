@@ -1,0 +1,12 @@
+.git
+.codex
+.github
+**/target
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+**/*.pem
+**/*.key
+data
+container-output

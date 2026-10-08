@@ -1,0 +1,52 @@
+name: Container parser
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'examples/**'
+      - 'scripts/test_container.sh'
+      - 'scripts/check_quotes_output.py'
+      - '.github/workflows/container.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'examples/**'
+      - 'scripts/test_container.sh'
+      - 'scripts/check_quotes_output.py'
+      - '.github/workflows/container.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-parser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build default parser image
+        run: docker build --tag silkworm-parser:ci .
+      - name: Parse offline pages as non-root without external networking
+        run: |
+          docker run --name silkworm-parser-smoke --network none silkworm-parser:ci
+          docker cp silkworm-parser-smoke:/app/data/quotes.jl /tmp/quotes.jl
+          python3 scripts/check_quotes_output.py /tmp/quotes.jl
+          test "$(docker inspect --format '{{.Config.User}}' silkworm-parser-smoke)" = '10001:10001'
+      - name: Remove smoke container
+        if: always()
+        run: docker rm -f silkworm-parser-smoke || true

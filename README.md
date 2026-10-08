@@ -108,3 +108,9 @@ MIT
 Use the [develop-silkworm skill](skills/develop-silkworm/SKILL.md) to build, test
 and optimize crawlers with Codex or ChatGPT. It includes API refresh guidance,
 reference recipes and an offline-tested crawler template.
+
+## Docker demo
+
+Build with `docker build -t silkworm-parser .` and run with
+`docker run --rm --network none silkworm-parser` to parse local fixture pages.
+See [container setup](docs/containers.md) for JSONL export and the test image.
