@@ -92,3 +92,10 @@ default = ["scraper-atomic"]
 scraper-atomic = ["scraper/atomic"]
 xpath = ["dep:xee-xpath"]
 cli-examples = ["dep:clap"]
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }
+
+[[bench]]
+name = "criterion_api"
+harness = false
