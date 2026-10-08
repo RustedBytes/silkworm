@@ -3,6 +3,27 @@
 Pipelines consume scraped items and write them to files or custom handlers. Each
 pipeline follows an async lifecycle: `open`, `process_item`, and `close`.
 
+## File Writer Ownership and Cancellation
+
+JSONL, CSV and XML pipelines each use one writer task with a bounded command
+queue of 16 items. The task owns the file, CSV header state and a reusable
+record buffer. Concurrent `process_item` calls are serialized in command
+admission order; records are not interleaved and CSV writes its header once.
+
+Cancelling a call before its command is admitted does not submit the item.
+Once admitted, the writer finishes the record even if the caller stops waiting.
+`close` stops accepting new commands, drains admitted records, writes the XML
+footer when applicable, and flushes the file. Cancelling `close` does not cancel
+this work. Reopening is rejected until the previous writer finishes closing;
+calling `open` on an already open pipeline also fails before touching the file.
+
+An I/O failure is returned to the waiting caller and retained for subsequent
+writes and `close`; no further records are written to a potentially partial
+document. Errors are logged even when a caller has been cancelled. A successful
+`process_item` acknowledges a buffered write; `close` flushes it, but does not
+perform an `fsync` or guarantee durability after a process crash. The writer
+requires the Tokio runtime to remain alive to finish accepted commands.
+
 ## ItemPipeline Trait
 
 The `ItemPipeline` trait defines the pipeline interface and is used by the

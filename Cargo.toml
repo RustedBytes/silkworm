@@ -21,6 +21,10 @@ name = "core"
 harness = false
 required-features = ["xpath"]
 
+[[bench]]
+name = "item_accounting"
+harness = false
+
 [[example]]
 name = "quotes_spider_xpath"
 required-features = ["xpath"]

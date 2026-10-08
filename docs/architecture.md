@@ -58,11 +58,16 @@ for req in self.state.spider.start_requests().await {
 ## Concurrency and Backpressure
 
 - `HttpClient` uses a semaphore to cap concurrent HTTP requests.
-- Incoming requests first go through a bounded `mpsc` channel sized by
-  `max_pending_requests` (defaults to `concurrency * 10`) to provide
-  backpressure.
-- A dispatcher task moves requests into an internal priority queue consumed by
-  workers (higher `Request.priority` first, FIFO for equal priorities).
+- Requests enter the priority queue directly (higher `Request.priority` first,
+  FIFO for equal priorities). No intermediate request channel or dispatcher
+  can hide additional backlog.
+- A configured `max_pending_requests` bounds ready and delayed requests
+  together, excluding active workers. A slot is released when a worker takes
+  a request. Overload stops the crawl with an explicit capacity error because
+  blocking workers that also produce requests could deadlock the crawl.
+- Ownership guards release pending counts and backlog slots on completion,
+  cancellation and queue cleanup. Delayed requests keep their slots until
+  consumed or cancelled.
 - Scraped items are pushed to a separate bounded queue and processed by a
   dedicated item worker, so pipeline I/O does not block HTTP workers.
 
@@ -156,3 +161,23 @@ errors, pending requests, and seen URLs. On Linux it also reports memory usage.
 Relevant code:
 - Stats collection and logging: `../src/engine.rs`
 - Structured logger: `../src/logging.rs`
+
+### Item idle notifications
+
+Item accounting wakes the coordinator only when the number of pending items
+transitions to zero. Intermediate completions cannot satisfy the idle predicate.
+The atomic decrement selects the final completion even across runtime threads;
+the coordinator registers its notification before checking the count. Dropped
+or cancelled items use the same ownership guard and release their count.
+Request completion notifications remain unchanged because they also drive
+cleanup of finished delayed-request tasks.
+
+To measure this accounting path independently of HTTP and pipeline I/O, run
+`cargo bench --bench item_accounting`. It uses the production ownership guard,
+a burst of 200,000 admitted items, one or four completion producers, and both a
+current-thread runtime and a four-worker runtime. Producers yield every 64
+completions; each case has two warmups and nine reported samples. The measured
+time includes task startup, accounting, notification waiting and joins, but
+excludes constructing the admitted guards. This is a scheduler microbenchmark,
+not a crawl throughput or bounded item-channel benchmark; it does not establish
+performance for HTML parsing, slow pipelines, HTTP, or external overload.
