@@ -82,6 +82,16 @@ let request = Request::<QuotesSpider>::get("https://example.com/search")
 - `follow` helpers for building new requests
 - `looks_like_html` heuristics
 
+Decoding uses BOM, then supported HTTP charset, then HTML meta/XML declarations.
+Without a declaration, valid UTF-8 is decoded directly. Enabling the optional
+`charset-detection` feature (Rust >= 1.98) invokes `charset-norm` for remaining
+non-UTF-8 payloads. The detector's best candidate supplies both the text and encoding;
+known encodings retain the existing encoding_rs label spelling. Detection is heuristic:
+short or ambiguous payloads may be misidentified. A rejected/no-match payload keeps
+the existing lossy UTF-8 fallback. Without this feature the fallback is unchanged.
+The existing bounded decode cache is shared by `text()` and `encoding()`, and HTML
+selection uses the same decoder. No request configuration or public signature changes.
+
 `HtmlResponse` is a wrapper around `Response` that adds CSS helpers and optional
 XPath evaluation.
 It caches decoded HTML and (optionally) parsed document state when the

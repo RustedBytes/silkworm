@@ -6,6 +6,7 @@ blocks in architecture.md are intentionally labelled text pseudocode instead.
 No external websites are fetched. Requires Python 3 and the project toolchain.
 """
 from pathlib import Path
+import argparse
 import re
 import subprocess
 import tempfile
@@ -118,6 +119,11 @@ static DOC_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::ne
     return source, len(modules) - 1
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--all-features', action='store_true',
+                        help='include charset-detection (requires Rust >= 1.98)')
+    args = parser.parse_args()
+    optional_flags = ['--all-features'] if args.all_features else ['--features', 'xpath,cli-examples']
     check_links()
     source, count = generate()
     tests = ROOT / 'tests'
@@ -127,7 +133,7 @@ def main():
         test.write(source)
         test.flush()
         target = Path(test.name).stem
-        for flags in [[], ['--all-features'], ['--no-default-features']]:
+        for flags in [[], optional_flags, ['--no-default-features']]:
             subprocess.run(['cargo', 'test', '--locked', '--test', target, *flags], cwd=ROOT, check=True)
     print(f'Verified {count} Rust snippets in three feature configurations; local quickstart passed.')
 

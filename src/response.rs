@@ -922,10 +922,38 @@ fn decode_body_uncached(body: &[u8], headers: &Headers) -> (String, String) {
         }
     }
 
+    // Preserve the cheap, deterministic path for ASCII and valid UTF-8.
+    if let Ok(text) = std::str::from_utf8(body) {
+        return (text.to_owned(), "utf-8".to_string());
+    }
+
+    #[cfg(feature = "charset-detection")]
+    if let Some(decoded) = detect_body_encoding(body) {
+        return decoded;
+    }
+
     (
         String::from_utf8_lossy(body).to_string(),
         "utf-8".to_string(),
     )
+}
+
+#[cfg(feature = "charset-detection")]
+fn detect_body_encoding(body: &[u8]) -> Option<(String, String)> {
+    let options = charset_norm::DetectionOptions {
+        enable_fallback: false,
+        ..charset_norm::DetectionOptions::default()
+    };
+    let matches = charset_norm::from_bytes_with(body, &options, &charset_norm::NoLogger);
+    let best = matches.best()?;
+    let text = best.decoded().ok()?.to_owned();
+    // Keep existing WHATWG labels where possible; retain the detector's canonical
+    // name for codecs outside encoding_rs instead of decoding with another codec.
+    let label = Encoding::for_label(best.encoding().as_bytes()).map_or_else(
+        || best.encoding().to_owned(),
+        |encoding| encoding.name().to_owned(),
+    );
+    Some((text, label))
 }
 
 fn decode_with_label(body: &[u8], label: &str) -> Option<(String, String)> {
@@ -1030,6 +1058,74 @@ mod tests {
     use crate::types::Headers;
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn decoding_preserves_empty_utf8_and_explicit_charset_paths() {
+        let empty = super::decode_body_uncached(b"", &Headers::new());
+        assert_eq!(empty, (String::new(), "utf-8".into()));
+        let utf8 = "Українська UTF-8 сторінка";
+        assert_eq!(
+            super::decode_body_uncached(utf8.as_bytes(), &Headers::new()),
+            (utf8.into(), "utf-8".into())
+        );
+        let headers = Headers::from([(
+            "content-type".into(),
+            "text/html; charset=windows-1252".into(),
+        )]);
+        assert_eq!(
+            super::decode_body_uncached(b"caf\xe9", &headers),
+            ("café".into(), "windows-1252".into())
+        );
+        let declared = b"<meta charset='windows-1252'>caf\xe9";
+        assert_eq!(
+            super::decode_body_uncached(declared, &Headers::new()).0,
+            "<meta charset='windows-1252'>café"
+        );
+        // BOM retains priority even when an incompatible HTTP label is present.
+        let bom = [b"\xef\xbb\xbf".as_slice(), utf8.as_bytes()].concat();
+        assert_eq!(super::decode_body_uncached(&bom, &headers).0, utf8);
+    }
+
+    #[cfg(feature = "charset-detection")]
+    #[test]
+    fn detects_undeclared_windows1251_and_reuses_decode_cache() {
+        // Fixture from charset-norm's documented Cyrillic detection example.
+        let text = "Всеки човек има право на образование. Образованието трябва да бъде безплатно.";
+        let (body, _, had_errors) = encoding_rs::WINDOWS_1251.encode(text);
+        assert!(!had_errors);
+        assert_ne!(String::from_utf8_lossy(&body), text);
+        let response = Response {
+            url: "https://example.com".into(),
+            status: 200,
+            headers: Headers::new(),
+            body: Bytes::copy_from_slice(&body),
+            request: Request::<()>::get("https://example.com"),
+        };
+        assert_eq!(response.text(), text);
+        assert_eq!(response.encoding(), "windows-1251");
+        assert_eq!(response.text(), text);
+        assert_eq!(response.into_html(4096).text(), text);
+    }
+
+    #[cfg(not(feature = "charset-detection"))]
+    #[test]
+    fn undeclared_invalid_utf8_keeps_legacy_lossy_fallback() {
+        assert_eq!(
+            super::decode_body_uncached(b"caf\xe9", &Headers::new()),
+            ("caf�".into(), "utf-8".into())
+        );
+    }
+
+    #[cfg(feature = "charset-detection")]
+    #[test]
+    fn rejected_binary_keeps_lossy_utf8_fallback() {
+        let body = [0, 0xff, 0, 0xfe, 0, 0xfd, 0, 0xfc].repeat(64);
+        assert!(super::detect_body_encoding(&body).is_none());
+        assert_eq!(
+            super::decode_body_uncached(&body, &Headers::new()),
+            (String::from_utf8_lossy(&body).into_owned(), "utf-8".into())
+        );
+    }
 
     #[test]
     fn response_url_join_resolves_relative() {

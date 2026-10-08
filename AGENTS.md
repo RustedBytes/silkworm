@@ -9,7 +9,7 @@ expected before proposing changes.
 - Crate package: `silkworm-rs`
 - Library crate name: `silkworm`
 - Rust edition: `2024`
-- Minimum Rust version: `1.92`
+- Minimum Rust version: `1.92` (default); `charset-detection` requires `1.98`
 - Main purpose: async-first scraping framework (engine + spider API +
   middleware/pipeline system)
 
@@ -17,7 +17,8 @@ expected before proposing changes.
 
 - Baseline (matches CI): `cargo test --all`
 - Format check/fix: `cargo fmt --all`
-- Full feature check: `cargo test --all-features`
+- MSRV feature check: `cargo test --features xpath,cli-examples`
+- Full feature check (Rust >= 1.98): `cargo test --all-features`
 - No-default feature check: `cargo test --no-default-features`
 - All targets compile check: `cargo check --all-targets`
 - Bench harness (XPath needed): `cargo bench --bench core --features xpath`
@@ -71,6 +72,7 @@ Examples:
   where behavior is changed.
 - Preserve feature-gated behavior:
   - `xpath` gates XPath support.
+  - `charset-detection` enables undeclared non-UTF-8 detection (Rust >= 1.98).
   - `scraper-atomic` changes HTML caching behavior.
   - `cli-examples` gates clap-based examples.
 - Keep error surfaces coherent with `SilkwormError` categories.

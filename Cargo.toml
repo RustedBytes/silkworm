@@ -62,6 +62,7 @@ name = "sitemap_spider"
 required-features = ["cli-examples"]
 
 [dependencies]
+charset-norm = { version = "4.1.0", optional = true }
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"], optional = true }
 encoding_rs = "0.8.42"
@@ -92,6 +93,8 @@ default = ["scraper-atomic"]
 scraper-atomic = ["scraper/atomic"]
 xpath = ["dep:xee-xpath"]
 cli-examples = ["dep:clap"]
+# charset-norm requires Rust 1.98; the default feature set retains MSRV 1.92.
+charset-detection = ["dep:charset-norm"]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }
