@@ -16,6 +16,8 @@ pub struct RunConfig<S: Spider> {
     pub item_pipelines: Vec<Arc<dyn ItemPipeline<S>>>,
     pub request_timeout: Option<Duration>,
     pub log_stats_interval: Option<Duration>,
+    /// Hard cap for ready and delayed requests, excluding active workers.
+    /// `None` leaves the backlog unbounded; overload always stops the crawl.
     pub max_pending_requests: Option<usize>,
     pub max_seen_requests: Option<usize>,
     pub html_max_size_bytes: usize,
@@ -94,6 +96,9 @@ impl<S: Spider> RunConfig<S> {
     }
 
     #[must_use]
+    /// Set the combined ready/delayed request backlog cap.
+    ///
+    /// Exceeding this cap aborts the crawl even when `fail_fast` is disabled.
     pub fn with_max_pending_requests(mut self, max_pending_requests: usize) -> Self {
         self.max_pending_requests = Some(max_pending_requests);
         self
