@@ -83,3 +83,20 @@ requested; it is separate from normal pull-request tests. Microbenchmarks and
 allocation boundaries are described in [architecture](architecture.md) and
 [HTTP documentation](http-and-logging.md). Reduced allocation counts alone do
 not establish faster whole-crawl throughput.
+
+## Update the package version
+
+After the workflow is merged, open Actions → Update version → Run workflow on
+`master`. Choose `patch`, `minor` or `major`, or enter an explicit stable
+`MAJOR.MINOR.PATCH` version. An explicit version takes precedence and must be
+strictly greater than the current version; leading zeros, prerelease suffixes and
+`v` prefixes are rejected.
+
+The workflow updates only the root package version in `Cargo.toml` and `Cargo.lock`,
+validates Cargo metadata, and opens a `chore/version-X.Y.Z` pull request. Existing
+version branches or `vX.Y.Z` tags cause a failure rather than being overwritten.
+GitHub Actions must be allowed to create pull requests under Settings → Actions →
+General → Workflow permissions. The workflow explicitly dispatches `test.yml` on
+its new branch, so tests can run even when the branch is pushed with `GITHUB_TOKEN`.
+Review and merge the version PR normally. This workflow does not create a tag,
+publish to crates.io or create a GitHub Release.
