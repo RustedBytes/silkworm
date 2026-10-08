@@ -102,3 +102,9 @@ For optional APIs, see [documentation verification](docs/development.md#verify-d
 ## License
 
 MIT
+
+## Agent skill
+
+Use the [develop-silkworm skill](skills/develop-silkworm/SKILL.md) to build, test
+and optimize crawlers with Codex or ChatGPT. It includes API refresh guidance,
+reference recipes and an offline-tested crawler template.
