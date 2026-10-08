@@ -1,0 +1,27 @@
+[package]
+name = "silkworm-parser-evaluation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+
+# Independent from the production package and its native TLS build.
+[workspace]
+
+[dependencies]
+scraper = { version = "=0.27.0", features = ["atomic"] }
+tl = { package = "rustedbytes-tl", version = "=0.2.0", features = ["std"] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }
+
+[[bench]]
+name = "parsers"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
