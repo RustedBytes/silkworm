@@ -14,7 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", default="1.92.0")
     parser.add_argument(
-        "--benchmark", choices=["seen_requests", "url_params"], default="seen_requests"
+        "--benchmark", choices=["seen_requests", "url_params", "csv_rows"], default="seen_requests"
     )
     args = parser.parse_args()
     repository = Path(__file__).resolve().parents[1]

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{build_xml, csv_escape, flatten_item};
+use super::{build_xml, csv::append_row, flatten_item};
 use crate::errors::{SilkwormError, SilkwormResult};
 use crate::logging::Logger;
 use crate::types::Item;
@@ -37,9 +37,9 @@ impl RecordFormat {
                 let flattened = flatten_item(item);
                 let names = fieldnames.get_or_insert_with(|| flattened.keys().cloned().collect());
                 if !*header_written {
-                    append_csv_row(buffer, names.iter().map(String::as_str));
+                    append_row(buffer, names.iter().map(String::as_str));
                 }
-                append_csv_row(
+                append_row(
                     buffer,
                     names
                         .iter()
@@ -58,16 +58,6 @@ impl RecordFormat {
             *header_written = true;
         }
     }
-}
-
-fn append_csv_row<'a>(buffer: &mut Vec<u8>, fields: impl Iterator<Item = &'a str>) {
-    for (index, field) in fields.enumerate() {
-        if index > 0 {
-            buffer.push(b',');
-        }
-        buffer.extend_from_slice(csv_escape(field).as_bytes());
-    }
-    buffer.push(b'\n');
 }
 
 enum Command {

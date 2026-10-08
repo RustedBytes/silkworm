@@ -88,11 +88,12 @@ impl HttpClient {
 
         let mut current_req = req;
         let mut redirects_followed = 0usize;
-        let mut visited = Vec::with_capacity(self.max_redirects.saturating_add(1));
+        // The configured limit is not a capacity hint: it may be arbitrarily
+        // large. Retain only URLs that actually participate in redirects.
+        let mut visited = Vec::new();
 
         loop {
             let url = Self::build_url(&current_req)?;
-            visited.push(url.clone());
 
             let proxy = current_req.proxy().map(str::to_string);
 
@@ -140,6 +141,7 @@ impl HttpClient {
                         self.max_redirects
                     )));
                 }
+                visited.push(url.clone());
 
                 let location = header_value_case_insensitive(&headers, "location")
                     .map(str::to_string)
@@ -602,6 +604,60 @@ mod tests {
             assert!(err.to_string().contains(&url));
             handle.await.expect("server task");
         }
+    }
+
+    #[tokio::test]
+    async fn huge_redirect_limit_does_not_allocate_before_url_validation() {
+        for follow_redirects in [false, true] {
+            let client = HttpClient::new(
+                1,
+                Headers::new(),
+                None,
+                1024,
+                follow_redirects,
+                usize::MAX,
+                false,
+            )
+            .expect("client");
+            let result = client.fetch(Request::<()>::new("not a URL")).await;
+            assert!(matches!(result, Err(crate::errors::SilkwormError::Http(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn huge_redirect_limit_fetches_body_and_still_detects_loops() {
+        for follow_redirects in [false, true] {
+            let (url, server) = start_test_server("ok").await.expect("local server");
+            let client = HttpClient::new(
+                1,
+                Headers::new(),
+                None,
+                1024,
+                follow_redirects,
+                usize::MAX,
+                false,
+            )
+            .expect("client");
+            let response = client
+                .fetch(Request::<()>::new(url))
+                .await
+                .expect("response");
+            assert_eq!(response.body.as_ref(), b"ok");
+            server.await.expect("server task");
+        }
+        let (url, server) = start_test_server_response(
+            "HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\n\r\n".to_string(),
+        )
+        .await
+        .expect("local server");
+        let client = HttpClient::new(1, Headers::new(), None, 1024, true, usize::MAX, false)
+            .expect("client");
+        let error = client
+            .fetch(Request::<()>::new(url))
+            .await
+            .expect_err("redirect loop");
+        assert!(error.to_string().contains("Redirect loop detected"));
+        server.await.expect("server task");
     }
 
     #[tokio::test]

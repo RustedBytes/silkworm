@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
+mod csv;
 mod writer;
 use writer::{FileWriter, RecordFormat};
 
@@ -338,16 +339,6 @@ fn scalar_to_string(value: &Item) -> String {
     }
 }
 
-fn csv_escape(value: &str) -> String {
-    let needs_quotes =
-        value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
-    if needs_quotes {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_string()
-    }
-}
-
 fn build_xml(tag: &str, value: &Item, depth: usize) -> String {
     let tag = sanitize_tag(tag);
     let indent = "  ".repeat(depth);
@@ -414,8 +405,8 @@ fn escape_xml(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CsvPipeline, ItemPipeline, JsonLinesPipeline, XmlPipeline, build_xml, csv_escape,
-        flatten_item, sanitize_tag,
+        CsvPipeline, ItemPipeline, JsonLinesPipeline, XmlPipeline, build_xml, flatten_item,
+        sanitize_tag,
     };
     use crate::request::SpiderResult;
     use crate::response::HtmlResponse;
@@ -456,9 +447,9 @@ mod tests {
 
     #[test]
     fn csv_escape_quotes_when_needed() {
-        assert_eq!(csv_escape("plain"), "plain");
-        assert_eq!(csv_escape("a,b"), "\"a,b\"");
-        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+        let mut output = Vec::new();
+        super::csv::append_row(&mut output, ["plain", "a,b", "a\"b"].into_iter());
+        assert_eq!(output, b"plain,\"a,b\",\"a\"\"b\"\n");
     }
 
     #[test]
