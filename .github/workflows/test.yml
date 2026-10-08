@@ -62,6 +62,7 @@ jobs:
           cargo doc --locked --no-deps --features xpath,cli-examples
           cargo test --locked --doc --features xpath,cli-examples
           python3 scripts/check_docs.py
+          python3 skills/develop-silkworm/scripts/check_examples.py --repo .
 
       - name: Run clippy
         run: cargo clippy --all-targets --features xpath,cli-examples -- -D warnings

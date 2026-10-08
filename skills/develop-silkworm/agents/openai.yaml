@@ -1,0 +1,4 @@
+interface:
+  display_name: "Silkworm"
+  short_description: "Build and test Silkworm crawlers"
+  default_prompt: "Use $develop-silkworm to build and test a Silkworm crawler."
