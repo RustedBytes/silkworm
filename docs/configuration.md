@@ -55,8 +55,12 @@ use silkworm::{DelayMiddleware, JsonLinesPipeline, RunConfig, UserAgentMiddlewar
 
 let config = RunConfig::<QuotesSpider>::new()
     .with_concurrency(32)
+    .with_max_pending_requests(500)
     .with_max_seen_requests(50_000)
     .with_request_timeout(Duration::from_secs(10))
+    .with_log_stats_interval(Duration::from_secs(10))
+    .with_html_max_size_bytes(2_000_000)
+    .with_keep_alive(true)
     .with_fail_fast(true)
     .with_request_middleware(UserAgentMiddleware::new(
         vec![],
@@ -91,6 +95,21 @@ silkworm::crawl(QuotesSpider).await?;
 
 // Sync usage (spawns its own Tokio runtime)
 silkworm::run_spider(QuotesSpider)?;
+```
+
+### Async application
+
+Keep the [README `QuotesSpider` definition](../README.md#quick-start) and replace its `main` with this one.
+If you already run a Tokio runtime, use `crawl`/`crawl_with`:
+
+```rust
+use silkworm::{crawl_with, RunConfig};
+
+#[tokio::main]
+async fn main() -> silkworm::SilkwormResult<()> {
+    let config = RunConfig::<QuotesSpider>::new().with_concurrency(32);
+    crawl_with(QuotesSpider, config).await
+}
 ```
 
 ## Completion and errors

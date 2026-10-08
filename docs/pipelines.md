@@ -109,3 +109,17 @@ let config = RunConfig::<QuotesSpider>::new()
     .with_item_pipeline(JsonLinesPipeline::new("data/items.jl"))
     .with_item_pipeline(CallbackPipeline::from_sync(|item, _spider| Ok(item)));
 ```
+
+## Save items as JSON Lines
+
+Write scraped items to files or plug in your own callback:
+
+```rust
+use silkworm::{run_spider_with, JsonLinesPipeline, RunConfig};
+
+let config = RunConfig::<QuotesSpider>::new().with_item_pipeline(JsonLinesPipeline::new("data/items.jl"));
+run_spider_with(QuotesSpider, config)?;
+```
+
+The pipeline fragment replaces the body of the [README quickstart](../README.md#quick-start) synchronous `main` (return
+`Ok(())` after the call). JSON Lines appends to an existing file.

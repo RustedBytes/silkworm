@@ -72,6 +72,30 @@ let request = Request::<QuotesSpider>::get("https://example.com/search")
     .with_allow_non_html(false);
 ```
 
+If `SkipNonHtmlMiddleware` is enabled, mark requests you want to handle as JSON/XML:
+
+```rust
+let request = Request::<QuotesSpider>::get("https://example.com/api")
+    .with_headers([("Accept", "application/json")])
+    .with_allow_non_html(true);
+```
+
+Typed metadata accessors are available when middleware contracts need metadata:
+
+```rust
+let mut request = Request::<QuotesSpider>::get("https://example.com")
+    .with_proxy("http://proxy.local:8080");
+let proxy = request.proxy();
+let retries = request.retry_times();
+request.set_retry_delay_secs(0.5);
+```
+
+For per-request parsing, attach a callback with `with_callback_fn` or
+`callback_from_fn`. The callback returns a `Send` future whose output is
+`SpiderResult<S>` and receives `(Arc<S>, Response<S>)`.
+`with_callback_fn` accepts a closure; `callback_from_fn` takes a function pointer.
+`SpiderResult<S>` is `Result<Vec<SpiderOutput<S>>, SilkwormError>`.
+
 ## Response and HtmlResponse
 
 `Response` represents the raw HTTP result. It exposes:
@@ -137,9 +161,28 @@ Code:
 - Selector helpers: `../src/response.rs`
 
 ```rust
-let nodes = response.select_or_empty(".quote");
-let first = response.select_first_or_none(".quote");
-let links = response.select_attrs("a.next", "href");
+// Error-returning methods (when you need precise error handling)
+let elements = response.select(".item")?;
+let element = response.select_first(".item")?;
+
+// Ergonomic methods (for cleaner code when errors can be ignored)
+let elements = response.select_or_empty(".item");  // Returns Vec, never errors
+let element = response.select_first_or_none(".item");  // Returns Option
+
+// Direct text/attribute extraction
+let title = response.text_from("h1");  // Empty string if not found
+let href = response.attr_from("a", "href");  // None if not found
+let tags = response.select_texts(".tag");  // Vec<String>
+let links = response.select_attrs("a.next", "href");  // Vec<String>
+
+// Follow links directly from selectors
+let next_requests = response.follow_css("a.next", "href");
+
+// Also works on HtmlElement for nested selections
+for item in response.select_or_empty(".item") {
+    let name = item.text_from(".name");
+    let price = item.text_from(".price");
+}
 ```
 
 CSS extraction helpers do not evaluate XPath. `xpath`/`xpath_first` return a

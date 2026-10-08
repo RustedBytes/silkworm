@@ -89,14 +89,7 @@ implemented here.
 
 ## Performance Regression Checks
 
-The benchmark harness supports optional threshold checks for selector/scheduler
-regressions:
-
-```bash
-SILKWORM_BENCH_CHECK=1 cargo bench --bench core --features xpath
-```
-
-CI runs this check in a dedicated nightly/manual benchmark job.
+See [benchmark commands and regression checks](development.md#benchmarks).
 
 ## Logging
 
