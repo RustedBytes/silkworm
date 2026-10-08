@@ -161,3 +161,23 @@ errors, pending requests, and seen URLs. On Linux it also reports memory usage.
 Relevant code:
 - Stats collection and logging: `../src/engine.rs`
 - Structured logger: `../src/logging.rs`
+
+### Item idle notifications
+
+Item accounting wakes the coordinator only when the number of pending items
+transitions to zero. Intermediate completions cannot satisfy the idle predicate.
+The atomic decrement selects the final completion even across runtime threads;
+the coordinator registers its notification before checking the count. Dropped
+or cancelled items use the same ownership guard and release their count.
+Request completion notifications remain unchanged because they also drive
+cleanup of finished delayed-request tasks.
+
+To measure this accounting path independently of HTTP and pipeline I/O, run
+`cargo bench --bench item_accounting`. It uses the production ownership guard,
+a burst of 200,000 admitted items, one or four completion producers, and both a
+current-thread runtime and a four-worker runtime. Producers yield every 64
+completions; each case has two warmups and nine reported samples. The measured
+time includes task startup, accounting, notification waiting and joins, but
+excludes constructing the admitted guards. This is a scheduler microbenchmark,
+not a crawl throughput or bounded item-channel benchmark; it does not establish
+performance for HTML parsing, slow pipelines, HTTP, or external overload.

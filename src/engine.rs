@@ -1,3 +1,7 @@
+mod pending;
+
+use pending::PendingWorkGuard;
+
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -262,33 +266,9 @@ impl Drop for QueueSlot {
     }
 }
 
-// Keep only accounting handles here: holding EngineState would create a cycle
-// between the engine's ready queue and its queued requests.
-struct PendingWorkGuard {
-    pending: Arc<AtomicUsize>,
-    notify: Arc<Notify>,
-}
-
-impl PendingWorkGuard {
-    fn new(pending: &Arc<AtomicUsize>, notify: &Arc<Notify>) -> Self {
-        pending.fetch_add(1, Ordering::SeqCst);
-        Self {
-            pending: pending.clone(),
-            notify: notify.clone(),
-        }
-    }
-}
-
-impl Drop for PendingWorkGuard {
-    fn drop(&mut self) {
-        self.pending.fetch_sub(1, Ordering::SeqCst);
-        self.notify.notify_waiters();
-    }
-}
-
 struct QueuedItem {
     item: Item,
-    pending_guard: PendingWorkGuard,
+    pending_guard: PendingWorkGuard<true>,
 }
 
 fn signal_stop_state<S: Spider>(state: &EngineState<S>) {
@@ -692,7 +672,7 @@ impl<S: Spider> Engine<S> {
     async fn enqueue_item(&self, item: Item) -> SilkwormResult<()> {
         let queued = QueuedItem {
             item,
-            pending_guard: PendingWorkGuard::new(
+            pending_guard: PendingWorkGuard::<true>::new(
                 &self.state.item_pending,
                 &self.state.item_pending_notify,
             ),
